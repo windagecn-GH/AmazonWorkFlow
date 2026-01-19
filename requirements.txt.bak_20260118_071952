@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+requests
+pytz
+google-cloud-bigquery
+requests-aws4auth

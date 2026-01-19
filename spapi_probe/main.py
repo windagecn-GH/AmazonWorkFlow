@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+import uuid
+import logging
+import sys
+from datetime import date as date_type
+from typing import Optional
+
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
+
+from .config import require_env, tz_for_scope
+from .utils_time import yesterday_local
+from .orders_agg import run_daily, fetch_orders_for_scope
+from .inventory_probe import run_inventory
+
+# Configure startup logging
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logger = logging.getLogger("spapi_main")
+logger.info("Service Initializing...")
+
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Service Startup Complete")
+
+@app.get("/debug/import_health")
+def import_health():
+    ok, checks = require_env()
+    return {"ok": ok, "env": checks}
+
+@app.get("/cron/daily")
+def cron_daily(
+    scope: str = Query(..., description="EU | UK | NA"),
+    snapshot_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    dry: int = Query(1, description="1=dry run (no BQ write)"),
+    debugItems: int = Query(0, description="1=embed per-order debug into raw_json_str"),
+    compact: int = Query(1, description="1=compact response"),
+    filterMode: str = Query("Created", description="Created or LastUpdated"),
+    maxPages: int = Query(50),
+    pageSize: int = Query(100),
+    maxOrders: int = Query(5000),
+):
+    scope_u = scope.upper()
+    tz = tz_for_scope(scope_u)
+
+    if snapshot_date:
+        y = int(snapshot_date[0:4])
+        m = int(snapshot_date[5:7])
+        d = int(snapshot_date[8:10])
+        snap = date_type(y, m, d)
+    else:
+        snap = yesterday_local(tz)
+
+    try:
+        out = run_daily(
+            scope=scope_u,
+            snapshot_date=snap,
+            dry=bool(int(dry)),
+            debug_items=bool(int(debugItems)),
+            compact=bool(int(compact)),
+            filter_mode=filterMode,
+            max_pages=int(maxPages),
+            page_size=int(pageSize),
+            max_orders=int(maxOrders),
+        )
+        return JSONResponse(out)
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            {
+                "ok": False,
+                "stage": "error",
+                "scope": scope_u,
+                "snapshot_date": str(snap),
+                "error": str(e),
+                "trace": traceback.format_exc()
+            },
+            status_code=200,
+        )
+
+@app.get("/cron/inventory")
+def cron_inventory(
+    scope: str = Query(..., description="EU | UK | NA"),
+    dry: int = Query(1, description="1=dry run")
+):
+    """
+    Fetches current inventory (FBA + AWD) for the given scope.
+    Snapshot date is UTC Today.
+    """
+    try:
+        out = run_inventory(scope=scope.upper(), dry=bool(int(dry)))
+        return JSONResponse(out)
+    except Exception as e:
+        import traceback
+        return JSONResponse(
+            {
+                "ok": False,
+                "stage": "error",
+                "scope": scope,
+                "error": str(e),
+                "trace": traceback.format_exc()
+            },
+            status_code=200
+        )
+
+@app.get("/debug/spapi_orders_probe")
+def debug_spapi_orders_probe(
+    scope: str = Query(..., description="EU | NA"),
+    createdAfter: Optional[str] = Query(None, description="ISO Date string override e.g. 2024-05-01T00:00:00Z"),
+    maxPages: int = 1,
+    pageSize: int = 10
+):
+    """
+    Read-only probe to check if SP-API returns orders.
+    Does NOT write to BigQuery.
+    """
+    scope_u = scope.upper()
+    run_id = f"debug-{uuid.uuid4()}"
+    
+    # We use fetch_orders_for_scope directly
+    # Need a dummy snapshot date if not used, but fetch_orders_for_scope uses it to build window
+    # if createdAfter is not provided.
+    dummy_date = date_type.today()
+    
+    try:
+        orders, debug_info = fetch_orders_for_scope(
+            scope=scope_u,
+            snapshot_date=dummy_date,
+            max_pages=maxPages,
+            page_size=pageSize,
+            run_id=run_id,
+            custom_created_after=createdAfter
+        )
+        
+        # Serialize a few orders to see raw data
+        sample_orders = []
+        for o in orders[:5]:
+            sample_orders.append({
+                "AmazonOrderId": o.amazon_order_id,
+                "Status": o.order_status,
+                "Raw": o.raw
+            })
+            
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "orders_found": len(orders),
+            "debug_info": debug_info,
+            "first_5_samples": sample_orders
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
