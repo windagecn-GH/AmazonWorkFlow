@@ -232,6 +232,7 @@ def process_orders_and_items(
         is_valid_sale = (not is_canceled) and (not is_non_amazon)
 
         units_in_order = 0
+        per_order_asin_units: Dict[str, int] = {}
         
         # Fetch items
         def _call_items():
@@ -249,7 +250,7 @@ def process_orders_and_items(
 
             for it in items_list:
                 asin = it.get("ASIN")
-                sku = it.get("SellerSKU")
+                seller_sku = it.get("SellerSKU")
                 qty_purchased = it.get("QuantityOrdered") or 0
                 
                 # Check cancellation at item level? Usually we use order status, 
@@ -260,47 +261,37 @@ def process_orders_and_items(
                 raw_items_rows.append({
                     "amazon_order_id": o.amazon_order_id,
                     "asin": asin,
-                    "sku": sku,
-                    "quantity": int(qty_purchased),
+                    "seller_sku": seller_sku,
+                    "quantity_ordered": int(qty_purchased),
                     "item_status": o.order_status, # Inherit order status
-                    "raw_json_str": json.dumps(it, ensure_ascii=False)
+                    "raw_json_str": json.dumps(it, ensure_ascii=False),
+                    "country": cc,
+                    "marketplace_id": o.marketplace_id,
                 })
-
-                # Aggregation Logic
-                if asin:
-                    key = (cc, o.marketplace_id, asin)
-                    if key not in asin_agg:
-                        asin_agg[key] = {"orders_count": 0, "units_sold": 0, "canceled_orders": 0}
-                    
-                    if is_canceled:
-                        # If order is canceled, we count it as a canceled order for this ASIN
-                        # We do NOT add to units_sold
-                        # Note: One order with 2 items of same ASIN counts as 1 canceled order? 
-                        # This logic is slightly complex per item. Simplified: 
-                        # We increment canceled_orders count for every line item occurrence to be safe, 
-                        # or we just track units.
-                        # Requirement: "ASIN ... canceled_orders" (count of orders containing this ASIN that were canceled)
-                        pass 
-                    else:
-                        if is_valid_sale:
-                            asin_agg[key]["units_sold"] += units
-
-                    # We increment orders_count if valid sale. 
-                    # If canceled, we increment canceled_orders.
-                    if is_canceled:
-                         asin_agg[key]["canceled_orders"] += 1
-                    elif is_non_amazon:
-                         pass # Skip non-amazon from sales stats
-                    else:
-                         asin_agg[key]["orders_count"] += 1
 
                 if is_valid_sale:
                     units_in_order += units
+                if asin:
+                    per_order_asin_units[asin] = per_order_asin_units.get(asin, 0) + units
 
         except Exception as e:
             logger.error(json.dumps({"event": "fetch_items_error", "order_id": o.amazon_order_id, "error": str(e), "run_id": run_id}))
             # Continue to next order, don't crash whole batch
             pass
+
+        for asin, units in per_order_asin_units.items():
+            key = (cc, o.marketplace_id, asin)
+            if key not in asin_agg:
+                asin_agg[key] = {"orders_count": 0, "units_sold": 0, "canceled_orders": 0}
+
+            if is_canceled:
+                asin_agg[key]["canceled_orders"] += 1
+                continue
+            if is_non_amazon:
+                continue
+
+            asin_agg[key]["orders_count"] += 1
+            asin_agg[key]["units_sold"] += units
 
         # Update Totals
         if is_valid_sale:
@@ -456,10 +447,12 @@ def write_bigquery(
             "snapshot_date": str(snapshot_date),
             "amazon_order_id": r["amazon_order_id"],
             "asin": r["asin"],
-            "sku": r["sku"],
-            "quantity": r["quantity"],
+            "seller_sku": r["seller_sku"],
+            "quantity_ordered": r["quantity_ordered"],
             "item_status": r["item_status"],
-            "raw_json_str": r["raw_json_str"]
+            "raw_json_str": r["raw_json_str"],
+            "country": r.get("country", ""),
+            "marketplace_id": r.get("marketplace_id", "")
         })
     results["order_items_raw"] = _bq_insert_with_fallback(client, bq_order_items_raw_table_id(), items_bq)
 
