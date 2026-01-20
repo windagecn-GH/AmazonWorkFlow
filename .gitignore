@@ -1,0 +1,27 @@
+
+# --- IDE / Python ---
+.idea/
+*.iml
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- IDE / Python ---
+.idea/
+*.iml
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- IDE / Python ---
+.idea/
+*.iml
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
