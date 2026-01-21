@@ -80,6 +80,15 @@ def _truncate_text(value: Any, max_len: int) -> str:
         return text[:max_len]
     return text
 
+def _unwrap_spapi_payload(x: Any) -> Any:
+    """SP-API bodies are often wrapped like {"payload": {...}} (sometimes multiple times).
+    Unwrap repeatedly until the inner body is reached.
+    """
+    cur = x
+    while isinstance(cur, dict) and isinstance(cur.get("payload"), dict):
+        cur = cur.get("payload") or {}
+    return cur
+
 def _extract_item_units(item: Dict[str, Any]) -> int:
     q = item.get("QuantityOrdered") or 0
     qc = item.get("QuantityCancelled") or 0
@@ -181,9 +190,7 @@ def fetch_orders_for_scope(
                 query_text,
             )
             body_value = resp.get("payload")
-            payload_inner = body_value
-            if isinstance(payload_inner, dict) and isinstance(payload_inner.get("payload"), dict):
-                payload_inner = payload_inner.get("payload") or {}
+            payload_inner = _unwrap_spapi_payload(body_value)
             body_text = _truncate_text(body_value, 2000) if compact else _truncate_text(body_value, 200000)
             orders_in_batch = len(payload_inner.get("Orders") or []) if isinstance(payload_inner, dict) else 0
             next_token_value = None
@@ -227,9 +234,7 @@ def fetch_orders_for_scope(
                     country_debug = country_resp.get("debug") or {}
                     country_request_id = country_debug.get("request_id") or country_debug.get("rid")
                     country_body_value = country_resp.get("payload")
-                    country_payload_inner = country_body_value
-                    if isinstance(country_payload_inner, dict) and isinstance(country_payload_inner.get("payload"), dict):
-                        country_payload_inner = country_payload_inner.get("payload") or {}
+                    country_payload_inner = _unwrap_spapi_payload(country_body_value)
                     country_body_text = (
                         _truncate_text(country_body_value, 2000)
                         if compact
@@ -275,9 +280,7 @@ def fetch_orders_for_scope(
                         "country": cc,
                         "marketplace_id": mid,
                     }
-        payload = resp.get("payload") or {}
-        if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
-            payload = payload.get("payload") or {}
+        payload = _unwrap_spapi_payload(resp.get("payload") or {})
         fetched_batch = payload.get("Orders") or []
         orders_raw_total += len(fetched_batch)
         for o in fetched_batch:
@@ -376,7 +379,10 @@ def process_orders_and_items(
                 seen_canceled.add(order_key)
 
         sales_channel = (o.sales_channel or "").strip()
-        is_non_amazon = bool(sales_channel) and sales_channel.lower() != "amazon"
+        sc_l = sales_channel.lower()
+        # SP-API commonly returns values like "Amazon.de" / "Amazon.es".
+        # Treat any SalesChannel that starts with "amazon" as Amazon; everything else is Non-Amazon.
+        is_non_amazon = bool(sc_l) and (not sc_l.startswith("amazon"))
         if is_non_amazon:
             totals["excluded_non_amazon_orders"] += 1
 
@@ -401,8 +407,19 @@ def process_orders_and_items(
         
         try:
             items_resp = _retry_spapi(_call_items, stage="order_items", run_id=run_id)
-            payload = items_resp.get("payload") or {}
+            payload = _unwrap_spapi_payload(items_resp.get("payload") or {})
             items_list = payload.get("OrderItems") or []
+            if debug_items and i == 0:
+                try:
+                    totals["_debug_order_items_sample"] = {
+                        "status": items_resp.get("status"),
+                        "ok": items_resp.get("ok"),
+                        "payload_type": type(payload).__name__,
+                        "payload_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
+                        "items_len": len(items_list) if isinstance(items_list, list) else 0,
+                    }
+                except Exception:
+                    totals["_debug_order_items_sample"] = {"error": "failed_to_capture"}
 
             for it in items_list:
                 asin = it.get("ASIN")
@@ -451,7 +468,8 @@ def process_orders_and_items(
             asin_agg[key]["units_sold"] += units
 
         # Update Totals
-        if not is_canceled and order_key not in seen_non_canceled:
+        # Keep orders_count consistent with sales definition: exclude canceled AND Non-Amazon.
+        if is_valid_sale and order_key not in seen_non_canceled:
             totals["orders_count"] += 1
             if cc in totals["breakdown"]:
                 totals["breakdown"][cc]["orders_count"] += 1
@@ -711,6 +729,7 @@ def run_daily(
             "list_orders_by_country": tw_debug.get("list_orders_by_country") or {},
             "parsed_orders_len": len(orders),
             "parsed_status_breakdown": status_breakdown,
+            "order_items_sample": totals.get("_debug_order_items_sample") or {},
             "agg_pre": {
                 "total_orders": len(orders),
                 "by_marketplace_id": agg_pre_by_marketplace,
