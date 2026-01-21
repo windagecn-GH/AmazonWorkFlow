@@ -69,6 +69,17 @@ def _retry_spapi(fn, *, stage: str, run_id: str, max_tries: int = 6, base_sleep:
         raise last_exc
     raise RuntimeError("SP-API retry exhausted")
 
+def _truncate_text(value: Any, max_len: int) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=True)
+    else:
+        text = str(value)
+    if len(text) > max_len:
+        return text[:max_len]
+    return text
+
 def _extract_item_units(item: Dict[str, Any]) -> int:
     q = item.get("QuantityOrdered") or 0
     qc = item.get("QuantityCancelled") or 0
@@ -93,6 +104,7 @@ def fetch_orders_for_scope(
     run_id: str = "debug",
     custom_created_after: Optional[str] = None,
     custom_created_before: Optional[str] = None,
+    include_debug: bool = False,
 ) -> Tuple[List[OrderLite], Dict[str, Any]]:
     tz = tz_for_scope(scope)
     dt_start_utc, dt_end_utc = day_window_utc(tz, snapshot_date)
@@ -151,6 +163,26 @@ def fetch_orders_for_scope(
             )
 
         resp = _retry_spapi(_call, stage="orders_list", run_id=run_id)
+        if include_debug:
+            resp_debug = resp.get("debug") or {}
+            request_id = resp_debug.get("request_id") or resp_debug.get("rid")
+            query_text = _truncate_text(params, 1000)
+            logger.info(
+                "event=list_orders_debug;run_id=%s;status_code=%s;request_id=%s;query=%s",
+                run_id,
+                resp.get("status"),
+                request_id,
+                query_text,
+            )
+            debug["list_orders"] = {
+                "status_code": resp.get("status"),
+                "request_id": request_id,
+                "rid": resp_debug.get("rid"),
+                "path": "/orders/v0/orders",
+                "query": params,
+                "error": resp.get("error"),
+                "body": _truncate_text(resp.get("payload"), 2000),
+            }
         payload = resp.get("payload") or {}
         fetched_batch = payload.get("Orders") or []
         
@@ -517,7 +549,8 @@ def run_daily(
         page_size=page_size,
         max_pages=max_pages,
         max_orders=max_orders,
-        run_id=run_id
+        run_id=run_id,
+        include_debug=debug_items,
     )
 
     totals, raw_orders, raw_items, asin_rows = process_orders_and_items(
@@ -549,5 +582,8 @@ def run_daily(
         "bq": bq_res,
         "time_window_debug": tw_debug,
     }
+
+    if debug_items:
+        resp["debug"] = {"list_orders": tw_debug.get("list_orders") or {}}
 
     return resp
