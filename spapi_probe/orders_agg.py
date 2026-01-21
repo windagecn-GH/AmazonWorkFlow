@@ -120,7 +120,10 @@ def fetch_orders_for_scope(
 
     orders: List[OrderLite] = []
     pages = 0
+    pages_fetched_total = 0
     next_token: Optional[str] = None
+    orders_raw_total = 0
+    orders_canceled_total = 0
 
     # Build query params
     def build_params(marketplace_ids_value: str, *, include_next_token: bool) -> Dict[str, Any]:
@@ -165,6 +168,7 @@ def fetch_orders_for_scope(
             )
 
         resp = _retry_spapi(_call, stage="orders_list", run_id=run_id)
+        pages_fetched_total += 1
         if include_debug:
             resp_debug = resp.get("debug") or {}
             request_id = resp_debug.get("request_id") or resp_debug.get("rid")
@@ -177,7 +181,14 @@ def fetch_orders_for_scope(
                 query_text,
             )
             body_value = resp.get("payload")
+            payload_inner = body_value
+            if isinstance(payload_inner, dict) and isinstance(payload_inner.get("payload"), dict):
+                payload_inner = payload_inner.get("payload") or {}
             body_text = _truncate_text(body_value, 2000) if compact else _truncate_text(body_value, 200000)
+            orders_in_batch = len(payload_inner.get("Orders") or []) if isinstance(payload_inner, dict) else 0
+            next_token_value = None
+            if isinstance(payload_inner, dict):
+                next_token_value = payload_inner.get("NextToken")
             list_orders_debug = {
                 "status_code": resp.get("status"),
                 "request_id": request_id,
@@ -192,6 +203,10 @@ def fetch_orders_for_scope(
                 },
                 "error": resp.get("error"),
                 "body": body_text,
+                "orders_in_batch": orders_in_batch,
+                "has_next_token": bool(next_token_value),
+                "next_token": _truncate_text(next_token_value, 60),
+                "payload_keys": sorted(payload_inner.keys()) if isinstance(payload_inner, dict) else [],
             }
             debug["list_orders"] = list_orders_debug
             debug.setdefault("list_orders_by_country", {})
@@ -208,14 +223,26 @@ def fetch_orders_for_scope(
                         )
 
                     country_resp = _call_country()
+                    pages_fetched_total += 1
                     country_debug = country_resp.get("debug") or {}
                     country_request_id = country_debug.get("request_id") or country_debug.get("rid")
                     country_body_value = country_resp.get("payload")
+                    country_payload_inner = country_body_value
+                    if isinstance(country_payload_inner, dict) and isinstance(country_payload_inner.get("payload"), dict):
+                        country_payload_inner = country_payload_inner.get("payload") or {}
                     country_body_text = (
                         _truncate_text(country_body_value, 2000)
                         if compact
                         else _truncate_text(country_body_value, 200000)
                     )
+                    country_orders_in_batch = (
+                        len(country_payload_inner.get("Orders") or [])
+                        if isinstance(country_payload_inner, dict)
+                        else 0
+                    )
+                    country_next_token_value = None
+                    if isinstance(country_payload_inner, dict):
+                        country_next_token_value = country_payload_inner.get("NextToken")
                     logger.info(
                         "event=list_orders_debug;run_id=%s;status_code=%s;request_id=%s;query=%s",
                         run_id,
@@ -237,6 +264,14 @@ def fetch_orders_for_scope(
                         },
                         "error": country_resp.get("error"),
                         "body": country_body_text,
+                        "orders_in_batch": country_orders_in_batch,
+                        "has_next_token": bool(country_next_token_value),
+                        "next_token": _truncate_text(country_next_token_value, 60),
+                        "payload_keys": (
+                            sorted(country_payload_inner.keys())
+                            if isinstance(country_payload_inner, dict)
+                            else []
+                        ),
                         "country": cc,
                         "marketplace_id": mid,
                     }
@@ -244,6 +279,11 @@ def fetch_orders_for_scope(
         if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
             payload = payload.get("payload") or {}
         fetched_batch = payload.get("Orders") or []
+        orders_raw_total += len(fetched_batch)
+        for o in fetched_batch:
+            status = (o.get("OrderStatus") or "").lower()
+            if status in ("canceled", "cancelled"):
+                orders_canceled_total += 1
         
         for o in fetched_batch:
             aoid = o.get("AmazonOrderId")
@@ -280,8 +320,10 @@ def fetch_orders_for_scope(
         # Gentle pacing to avoid throttles when looping
         time.sleep(0.15)
 
-    debug["pages_fetched"] = pages
+    debug["pages_fetched"] = pages_fetched_total
     debug["orders_fetched"] = len(orders)
+    debug["orders_raw_total"] = orders_raw_total
+    debug["orders_canceled_total"] = orders_canceled_total
     return orders, debug
 
 def process_orders_and_items(
@@ -649,8 +691,12 @@ def run_daily(
         "run_id": run_id,
         "scope": scope,
         "ok": True,
+        "status": 200,
+        "error": None,
         "stage": "complete",
         "orders_count": totals["orders_count"],
+        "orders_raw_total": tw_debug.get("orders_raw_total", 0),
+        "orders_canceled_total": tw_debug.get("orders_canceled_total", 0),
         "units_sold": totals["units_sold"],
         "breakdown": totals["breakdown"],
         "items_rows_count": len(raw_items),

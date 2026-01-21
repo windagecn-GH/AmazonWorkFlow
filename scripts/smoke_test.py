@@ -154,6 +154,48 @@ def _run_orders_parse_tests() -> None:
     finally:
         orders_agg.spapi_request_json = original
 
+def _run_list_orders_debug_shape_tests() -> None:
+    from spapi_probe import orders_agg  # noqa: E402
+
+    original = orders_agg.spapi_request_json
+    try:
+        def _mock_spapi_request_json(*, scope: str, method: str, path: str, query=None, **_kwargs):
+            if path == "/orders/v0/orders":
+                return {
+                    "ok": True,
+                    "status": 200,
+                    "payload": {"payload": {"Orders": [{}], "NextToken": "X"}},
+                    "debug": {"rid": "x"},
+                }
+            if path.endswith("/orderItems"):
+                return {
+                    "ok": True,
+                    "status": 200,
+                    "payload": {"payload": {"OrderItems": []}},
+                    "debug": {"rid": "y"},
+                }
+            return {"ok": False, "status": 404, "payload": {}, "error": "not found", "debug": {}}
+
+        orders_agg.spapi_request_json = _mock_spapi_request_json
+        out = orders_agg.run_daily(
+            scope="EU",
+            snapshot_date=date(2026, 1, 17),
+            dry=True,
+            debug_items=True,
+            compact=True,
+            filter_mode="Created",
+            max_pages=1,
+            page_size=1,
+            max_orders=10,
+        )
+        debug = out.get("debug") or {}
+        by_country = debug.get("list_orders_by_country") or {}
+        sample = next(iter(by_country.values()), {})
+        assert sample.get("orders_in_batch") == 1
+        assert sample.get("has_next_token") is True
+    finally:
+        orders_agg.spapi_request_json = original
+
 
 def main() -> None:
     fastapi_spec = importlib.util.find_spec("fastapi")
@@ -169,6 +211,8 @@ def main() -> None:
     print("refresh_token_tests", "ok")
     _run_orders_parse_tests()
     print("orders_parse_tests", "ok")
+    _run_list_orders_debug_shape_tests()
+    print("list_orders_debug_shape_tests", "ok")
 
     if fastapi_spec is not None:
         prev_k_service = os.environ.pop("K_SERVICE", None)
