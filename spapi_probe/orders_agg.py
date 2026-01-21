@@ -20,7 +20,7 @@ from .config import (
     country_for_marketplace_id,
     tz_for_scope,
 )
-from .spapi_client import spapi_request
+from .spapi_core import spapi_request_json, SpapiRequestError
 from .utils_time import day_window_utc
 
 # Configure structured logging
@@ -35,21 +35,39 @@ class OrderLite:
     sales_channel: str
     raw: Dict[str, Any]
 
-def _retry_spapi(fn, *, max_tries: int = 6, base_sleep: float = 0.8):
+def _retry_spapi(fn, *, stage: str, run_id: str, max_tries: int = 6, base_sleep: float = 0.8):
     """Retry SP-API calls on 429/503/504 with exponential backoff."""
-    last_exc = None
+    last_exc: Optional[Exception] = None
     for i in range(max_tries):
         try:
-            return fn()
-        except Exception as e:
+            resp = fn()
+            if isinstance(resp, dict) and not resp.get("ok", False):
+                status = int(resp.get("status") or 0)
+                err = SpapiRequestError(
+                    message=resp.get("error") or "SP-API request failed",
+                    status=status,
+                    stage=stage,
+                    run_id=run_id,
+                    debug=resp.get("debug") or {},
+                )
+                if status in (429, 503, 504):
+                    last_exc = err
+                    time.sleep(base_sleep * (2 ** i))
+                    continue
+                raise err
+            return resp
+        except SpapiRequestError as e:
             last_exc = e
-            msg = str(e)
-            # Heuristic: requests raises "429 Client Error"
-            if "429" in msg or "503" in msg or "504" in msg:
+            if e.status in (429, 503, 504) and i < max_tries - 1:
                 time.sleep(base_sleep * (2 ** i))
                 continue
             raise
-    raise last_exc
+        except Exception as e:
+            last_exc = e
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("SP-API retry exhausted")
 
 def _extract_item_units(item: Dict[str, Any]) -> int:
     q = item.get("QuantityOrdered") or 0
@@ -125,14 +143,14 @@ def fetch_orders_for_scope(
         params = build_params()
 
         def _call():
-            return spapi_request(
+            return spapi_request_json(
                 scope="EU" if scope.upper() in ("EU", "UK") else scope.upper(),
                 method="GET",
                 path="/orders/v0/orders",
                 query=params,
             )
 
-        resp = _retry_spapi(_call)
+        resp = _retry_spapi(_call, stage="orders_list", run_id=run_id)
         payload = resp.get("payload") or {}
         fetched_batch = payload.get("Orders") or []
         
@@ -236,7 +254,7 @@ def process_orders_and_items(
         
         # Fetch items
         def _call_items():
-            return spapi_request(
+            return spapi_request_json(
                 scope="EU" if scope.upper() in ("EU", "UK") else scope.upper(),
                 method="GET",
                 path=f"/orders/v0/orders/{o.amazon_order_id}/orderItems",
@@ -244,7 +262,7 @@ def process_orders_and_items(
             )
         
         try:
-            items_resp = _retry_spapi(_call_items)
+            items_resp = _retry_spapi(_call_items, stage="order_items", run_id=run_id)
             payload = items_resp.get("payload") or {}
             items_list = payload.get("OrderItems") or []
 
@@ -274,10 +292,11 @@ def process_orders_and_items(
                 if asin:
                     per_order_asin_units[asin] = per_order_asin_units.get(asin, 0) + units
 
+        except SpapiRequestError:
+            raise
         except Exception as e:
             logger.error(json.dumps({"event": "fetch_items_error", "order_id": o.amazon_order_id, "error": str(e), "run_id": run_id}))
-            # Continue to next order, don't crash whole batch
-            pass
+            raise
 
         for asin, units in per_order_asin_units.items():
             key = (cc, o.marketplace_id, asin)

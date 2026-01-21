@@ -10,6 +10,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
 from .config import require_env, tz_for_scope
+from .spapi_core import SpapiRequestError
 from .utils_time import yesterday_local
 from .orders_agg import run_daily, fetch_orders_for_scope
 from .inventory_probe import run_inventory
@@ -66,15 +67,21 @@ def cron_daily(
             max_orders=int(maxOrders),
         )
         return JSONResponse(out)
+    except SpapiRequestError as e:
+        payload = e.to_dict()
+        payload.update({"scope": scope_u, "snapshot_date": str(snap)})
+        return JSONResponse(payload, status_code=200)
     except Exception as e:
         import traceback
         return JSONResponse(
             {
                 "ok": False,
+                "status": 0,
                 "stage": "error",
                 "scope": scope_u,
                 "snapshot_date": str(snap),
                 "error": str(e),
+                "run_id": "unknown",
                 "trace": traceback.format_exc()
             },
             status_code=200,
@@ -92,14 +99,20 @@ def cron_inventory(
     try:
         out = run_inventory(scope=scope.upper(), dry=bool(int(dry)))
         return JSONResponse(out)
+    except SpapiRequestError as e:
+        payload = e.to_dict()
+        payload.update({"scope": scope.upper()})
+        return JSONResponse(payload, status_code=200)
     except Exception as e:
         import traceback
         return JSONResponse(
             {
                 "ok": False,
+                "status": 0,
                 "stage": "error",
                 "scope": scope,
                 "error": str(e),
+                "run_id": "unknown",
                 "trace": traceback.format_exc()
             },
             status_code=200

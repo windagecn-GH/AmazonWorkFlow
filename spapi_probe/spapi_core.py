@@ -6,8 +6,43 @@ from typing import Any, Dict, Optional
 from .spapi_client import spapi_request
 
 
+class SpapiRequestError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        message: str,
+        status: int,
+        stage: str,
+        run_id: str,
+        debug: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+        self.stage = stage
+        self.run_id = run_id
+        self.debug = debug or {}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "status": self.status,
+            "error": self.message,
+            "stage": self.stage,
+            "run_id": self.run_id,
+            "debug": self.debug,
+        }
+
+
+def _normalize_scope(scope: str) -> str:
+    scope_u = (scope or "").upper()
+    if scope_u == "UK":
+        return "EU"
+    return scope_u
+
+
 def spapi_request_json(
-    region: str,
+    scope: str,
     method: str,
     path: str,
     query: Optional[Dict[str, Any]] = None,
@@ -20,14 +55,15 @@ def spapi_request_json(
 
     Always returns a dict with keys:
       - ok: bool
-      - status / status_code: int
-      - payload / body: parsed JSON (dict/list) or text
+      - status: int
+      - payload: parsed JSON (dict/list) or text
       - debug: dict
       - error: str (only when ok is False or exception)
     """
     try:
+        normalized_scope = _normalize_scope(scope)
         status, resp_body, debug = spapi_request(
-            region=region,
+            scope=normalized_scope,
             method=method,
             path=path,
             query=query,
@@ -36,27 +72,29 @@ def spapi_request_json(
             timeout=timeout,
         )
 
+        try:
+            status_int = int(status)
+        except Exception:
+            status_int = 0
+
         # Build normalized response dict
         out: Dict[str, Any] = {
-            "ok": 200 <= int(status) < 300,
-            "status": int(status),
-            "status_code": int(status),
+            "ok": 200 <= status_int < 300,
+            "status": status_int,
             "payload": resp_body,
-            "body": resp_body,  # alias for convenience
             "debug": debug if isinstance(debug, dict) else {"debug_raw": debug},
         }
 
         if not out["ok"]:
             out["error"] = _extract_error_message(resp_body, status)
+            out["payload"] = {}
         return out
 
     except Exception as e:
         return {
             "ok": False,
             "status": 0,
-            "status_code": 0,
-            "payload": None,
-            "body": None,
+            "payload": {},
             "debug": {"exception": repr(e)},
             "error": repr(e),
         }

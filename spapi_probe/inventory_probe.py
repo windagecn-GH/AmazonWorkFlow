@@ -15,7 +15,7 @@ from .config import (
     marketplaces_for_scope,
     tz_for_scope,
 )
-from .spapi_client import spapi_request
+from .spapi_core import spapi_request_json, SpapiRequestError
 
 logger = logging.getLogger("spapi_inventory")
 
@@ -30,15 +30,38 @@ INV_POOL_MAP = {
     "US": "ATVPDKIKX0DER",
 }
 
-def _retry_spapi(fn, *, max_tries: int = 4, base_sleep: float = 1.0):
+def _retry_spapi(fn, *, stage: str, run_id: str, max_tries: int = 4, base_sleep: float = 1.0):
+    last_exc: Optional[Exception] = None
     for i in range(max_tries):
         try:
-            return fn()
-        except Exception:
-            time.sleep(base_sleep * (2 ** i))
-            if i == max_tries - 1:
-                raise
-    return {}
+            resp = fn()
+            if isinstance(resp, dict) and not resp.get("ok", False):
+                status = int(resp.get("status") or 0)
+                err = SpapiRequestError(
+                    message=resp.get("error") or "SP-API request failed",
+                    status=status,
+                    stage=stage,
+                    run_id=run_id,
+                    debug=resp.get("debug") or {},
+                )
+                if status in (429, 503, 504):
+                    last_exc = err
+                    time.sleep(base_sleep * (2 ** i))
+                    continue
+                raise err
+            return resp
+        except SpapiRequestError as e:
+            last_exc = e
+            if e.status in (429, 503, 504) and i < max_tries - 1:
+                time.sleep(base_sleep * (2 ** i))
+                continue
+            raise
+        except Exception as e:
+            last_exc = e
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("SP-API retry exhausted")
 
 def fetch_fba_inventory(scope: str, run_id: str) -> List[Dict[str, Any]]:
     """
@@ -85,7 +108,7 @@ def fetch_fba_inventory(scope: str, run_id: str) -> List[Dict[str, Any]]:
                 q["nextToken"] = next_token
                 
             def _call():
-                return spapi_request(
+                return spapi_request_json(
                     scope=api_scope,
                     method="GET",
                     path="/fba/inventory/v1/summaries",
@@ -93,7 +116,7 @@ def fetch_fba_inventory(scope: str, run_id: str) -> List[Dict[str, Any]]:
                 )
             
             try:
-                resp = _retry_spapi(_call)
+                resp = _retry_spapi(_call, stage="fba_summary", run_id=run_id)
                 payload = resp.get("payload") or {}
                 summaries = payload.get("inventorySummaries") or []
                 
@@ -141,9 +164,11 @@ def fetch_fba_inventory(scope: str, run_id: str) -> List[Dict[str, Any]]:
                     break
                 time.sleep(0.1) # Pace
                 
+            except SpapiRequestError:
+                raise
             except Exception as e:
                 logger.error(json.dumps({"event": "fba_fetch_error", "pool": pool, "error": str(e), "run_id": run_id}))
-                break
+                raise
                 
     return rows
 
@@ -171,7 +196,7 @@ def fetch_awd_inventory(scope: str, run_id: str) -> List[Dict[str, Any]]:
             q["nextToken"] = next_token
             
         def _call():
-            return spapi_request(
+            return spapi_request_json(
                 scope="NA",
                 method="GET",
                 path="/awd/2024-05-09/inventory",
@@ -179,7 +204,7 @@ def fetch_awd_inventory(scope: str, run_id: str) -> List[Dict[str, Any]]:
             )
             
         try:
-            resp = _retry_spapi(_call)
+            resp = _retry_spapi(_call, stage="awd_summary", run_id=run_id)
             payload = resp.get("payload") or {}
             listings = payload.get("listingInventory") or []
             
@@ -206,10 +231,12 @@ def fetch_awd_inventory(scope: str, run_id: str) -> List[Dict[str, Any]]:
                 break
             time.sleep(0.1)
             
+        except SpapiRequestError:
+            raise
         except Exception as e:
-             # AWD might not be active or authorized, log and skip
-             logger.error(json.dumps({"event": "awd_fetch_error", "error": str(e), "run_id": run_id}))
-             break
+            # AWD might not be active or authorized, log and skip
+            logger.error(json.dumps({"event": "awd_fetch_error", "error": str(e), "run_id": run_id}))
+            raise
 
     return rows
 
