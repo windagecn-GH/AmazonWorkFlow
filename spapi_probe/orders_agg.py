@@ -105,6 +105,7 @@ def fetch_orders_for_scope(
     custom_created_after: Optional[str] = None,
     custom_created_before: Optional[str] = None,
     include_debug: bool = False,
+    compact: bool = True,
 ) -> Tuple[List[OrderLite], Dict[str, Any]]:
     tz = tz_for_scope(scope)
     dt_start_utc, dt_end_utc = day_window_utc(tz, snapshot_date)
@@ -145,6 +146,7 @@ def fetch_orders_for_scope(
         "dt_start_utc": dt_start_utc,
         "dt_end_utc_raw": dt_end_utc,
     }
+    mp_map = marketplaces_for_scope(scope)
 
     logger.info(json.dumps({"event": "fetch_orders_start", "scope": scope, "params": debug}))
 
@@ -174,15 +176,31 @@ def fetch_orders_for_scope(
                 request_id,
                 query_text,
             )
-            debug["list_orders"] = {
+            body_value = resp.get("payload")
+            body_text = _truncate_text(body_value, 2000) if compact else _truncate_text(body_value, 200000)
+            list_orders_debug = {
                 "status_code": resp.get("status"),
                 "request_id": request_id,
                 "rid": resp_debug.get("rid"),
                 "path": "/orders/v0/orders",
                 "query": params,
+                "query_keys": {
+                    "CreatedAfter": params.get("CreatedAfter"),
+                    "CreatedBefore": params.get("CreatedBefore"),
+                    "MarketplaceIds": params.get("MarketplaceIds"),
+                    "OrderStatuses": params.get("OrderStatuses"),
+                },
                 "error": resp.get("error"),
-                "body": _truncate_text(resp.get("payload"), 2000),
+                "body": body_text,
             }
+            debug["list_orders"] = list_orders_debug
+            debug.setdefault("list_orders_by_country", {})
+            for cc, mid in mp_map.items():
+                debug["list_orders_by_country"][cc] = {
+                    **list_orders_debug,
+                    "country": cc,
+                    "marketplace_id": mid,
+                }
         payload = resp.get("payload") or {}
         fetched_batch = payload.get("Orders") or []
         
@@ -551,6 +569,7 @@ def run_daily(
         max_orders=max_orders,
         run_id=run_id,
         include_debug=debug_items,
+        compact=compact,
     )
 
     totals, raw_orders, raw_items, asin_rows = process_orders_and_items(
@@ -584,6 +603,9 @@ def run_daily(
     }
 
     if debug_items:
-        resp["debug"] = {"list_orders": tw_debug.get("list_orders") or {}}
+        resp["debug"] = {
+            "list_orders": tw_debug.get("list_orders") or {},
+            "list_orders_by_country": tw_debug.get("list_orders_by_country") or {},
+        }
 
     return resp
