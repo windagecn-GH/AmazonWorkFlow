@@ -98,7 +98,13 @@ def _run_orders_parse_tests() -> None:
                                     "MarketplaceId": "A1PA6795UKMFR9",
                                     "OrderStatus": "Shipped",
                                     "SalesChannel": "Amazon",
-                                }
+                                },
+                                {
+                                    "AmazonOrderId": "ORDER2",
+                                    "MarketplaceId": "A13V1IB3VIYZZH",
+                                    "OrderStatus": "Canceled",
+                                    "SalesChannel": "Amazon",
+                                },
                             ],
                             "NextToken": None,
                         }
@@ -138,11 +144,13 @@ def _run_orders_parse_tests() -> None:
         )
         debug = out.get("debug") or {}
         assert debug.get("parsed_orders_len", 0) > 0
-        assert out.get("orders_count", 0) > 0
+        assert out.get("orders_count", 0) == 1
+        assert out.get("canceled_orders", 0) == 1
         assert out.get("units_sold", 0) > 0
         by_country = debug.get("list_orders_by_country") or {}
-        de_query = (by_country.get("DE") or {}).get("query") or {}
-        assert "," not in (de_query.get("MarketplaceIds") or "")
+        for entry in by_country.values():
+            query = (entry or {}).get("query") or {}
+            assert "," not in (query.get("MarketplaceIds") or "")
     finally:
         orders_agg.spapi_request_json = original
 

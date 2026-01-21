@@ -319,14 +319,19 @@ def process_orders_and_items(
     # Key: (country, marketplace_id, asin)
     # Value: {orders_count, units_sold, canceled_orders}
     asin_agg: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+    seen_non_canceled: set[Tuple[str, str]] = set()
+    seen_canceled: set[Tuple[str, str]] = set()
 
     for i, o in enumerate(orders):
         cc = country_for_marketplace_id(scope, o.marketplace_id)
         status = (o.order_status or "").lower()
 
         is_canceled = status == "canceled" or status == "cancelled"
+        order_key = (o.amazon_order_id, o.marketplace_id)
         if is_canceled:
-            totals["canceled_orders"] += 1
+            if order_key not in seen_canceled:
+                totals["canceled_orders"] += 1
+                seen_canceled.add(order_key)
 
         sales_channel = (o.sales_channel or "").strip()
         is_non_amazon = bool(sales_channel) and sales_channel.lower() != "amazon"
@@ -404,14 +409,18 @@ def process_orders_and_items(
             asin_agg[key]["units_sold"] += units
 
         # Update Totals
-        if is_valid_sale:
+        if not is_canceled and order_key not in seen_non_canceled:
             totals["orders_count"] += 1
-            totals["units_sold"] += units_in_order
             if cc in totals["breakdown"]:
                 totals["breakdown"][cc]["orders_count"] += 1
-                totals["breakdown"][cc]["units_sold"] += units_in_order
             else:
-                totals["breakdown"][cc] = {"marketplace_id": o.marketplace_id, "orders_count": 1, "units_sold": units_in_order}
+                totals["breakdown"][cc] = {"marketplace_id": o.marketplace_id, "orders_count": 1, "units_sold": 0}
+            seen_non_canceled.add(order_key)
+
+        if is_valid_sale:
+            totals["units_sold"] += units_in_order
+            if cc in totals["breakdown"]:
+                totals["breakdown"][cc]["units_sold"] += units_in_order
 
         # Order Raw Row
         raw_payload = dict(o.raw)
@@ -612,6 +621,9 @@ def run_daily(
         include_debug=debug_items,
         compact=compact,
     )
+    agg_pre_by_marketplace: Dict[str, int] = {}
+    for o in orders:
+        agg_pre_by_marketplace[o.marketplace_id] = agg_pre_by_marketplace.get(o.marketplace_id, 0) + 1
     status_breakdown: Dict[str, int] = {}
     for o in orders:
         key = (o.order_status or "").strip() or "UNKNOWN"
@@ -653,6 +665,16 @@ def run_daily(
             "list_orders_by_country": tw_debug.get("list_orders_by_country") or {},
             "parsed_orders_len": len(orders),
             "parsed_status_breakdown": status_breakdown,
+            "agg_pre": {
+                "total_orders": len(orders),
+                "by_marketplace_id": agg_pre_by_marketplace,
+            },
+            "agg_post": {
+                "breakdown_orders_count_sum": sum(
+                    int(v.get("orders_count", 0) or 0)
+                    for v in (totals.get("breakdown") or {}).values()
+                ),
+            },
         }
 
     return resp
