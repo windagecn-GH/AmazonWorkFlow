@@ -105,27 +105,7 @@ def cron_daily(
                 },
             }
         )
-    if dry_int == 1 and _is_cloud_run() and int(debugItems) != 1:
-        return _dry_run_response(
-            {
-                "run_id": run_id,
-                "scope": scope_u,
-                "snapshot_date": str(snap),
-                "dry": True,
-                "steps": [
-                    "Fetch orders list (paginated)",
-                    "Fetch order items for each order",
-                    "Aggregate orders/items/ASIN stats",
-                    "Write results to BigQuery (skipped in dry run)",
-                ],
-                "params": {
-                    "filter_mode": filterMode,
-                    "max_pages": int(maxPages),
-                    "page_size": int(pageSize),
-                    "max_orders": int(maxOrders),
-                },
-            }
-        )
+    # On Cloud Run, allow dry=1 to execute and compute aggregates (no BQ writes).
 
     try:
         out = run_daily(

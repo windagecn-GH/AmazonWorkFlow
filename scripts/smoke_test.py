@@ -81,7 +81,11 @@ def _run_orders_parse_tests() -> None:
 
     original = orders_agg.spapi_request_json
     try:
+        seen_marketplace_ids = []
+
         def _mock_spapi_request_json(*, scope: str, method: str, path: str, query=None, **_kwargs):
+            if path == "/orders/v0/orders":
+                seen_marketplace_ids.append((query or {}).get("MarketplaceIds"))
             if path == "/orders/v0/orders":
                 return {
                     "ok": True,
@@ -105,7 +109,17 @@ def _run_orders_parse_tests() -> None:
                 return {
                     "ok": True,
                     "status": 200,
-                    "payload": {"payload": {"OrderItems": []}},
+                    "payload": {
+                        "payload": {
+                            "OrderItems": [
+                                {
+                                    "ASIN": "B000TEST",
+                                    "SellerSKU": "SKU1",
+                                    "QuantityOrdered": 2,
+                                }
+                            ]
+                        }
+                    },
                     "debug": {"rid": "y"},
                 }
             return {"ok": False, "status": 404, "payload": {}, "error": "not found", "debug": {}}
@@ -124,6 +138,11 @@ def _run_orders_parse_tests() -> None:
         )
         debug = out.get("debug") or {}
         assert debug.get("parsed_orders_len", 0) > 0
+        assert out.get("orders_count", 0) > 0
+        assert out.get("units_sold", 0) > 0
+        by_country = debug.get("list_orders_by_country") or {}
+        de_query = (by_country.get("DE") or {}).get("query") or {}
+        assert "," not in (de_query.get("MarketplaceIds") or "")
     finally:
         orders_agg.spapi_request_json = original
 

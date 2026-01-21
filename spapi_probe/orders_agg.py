@@ -123,9 +123,9 @@ def fetch_orders_for_scope(
     next_token: Optional[str] = None
 
     # Build query params
-    def build_params() -> Dict[str, Any]:
-        p: Dict[str, Any] = {"MarketplaceIds": ",".join(marketplace_ids), "PageSize": page_size}
-        if next_token:
+    def build_params(marketplace_ids_value: str, *, include_next_token: bool) -> Dict[str, Any]:
+        p: Dict[str, Any] = {"MarketplaceIds": marketplace_ids_value, "PageSize": page_size}
+        if include_next_token and next_token:
             p["NextToken"] = next_token
         else:
             # Using CreatedAfter/Before by default; caller can switch to LastUpdated
@@ -154,7 +154,7 @@ def fetch_orders_for_scope(
         if pages >= max_pages or len(orders) >= max_orders:
             break
 
-        params = build_params()
+        params = build_params(",".join(marketplace_ids), include_next_token=True)
 
         def _call():
             return spapi_request_json(
@@ -195,12 +195,51 @@ def fetch_orders_for_scope(
             }
             debug["list_orders"] = list_orders_debug
             debug.setdefault("list_orders_by_country", {})
-            for cc, mid in mp_map.items():
-                debug["list_orders_by_country"][cc] = {
-                    **list_orders_debug,
-                    "country": cc,
-                    "marketplace_id": mid,
-                }
+            if pages == 0:
+                for cc, mid in mp_map.items():
+                    country_params = build_params(mid, include_next_token=False)
+
+                    def _call_country():
+                        return spapi_request_json(
+                            scope="EU" if scope.upper() in ("EU", "UK") else scope.upper(),
+                            method="GET",
+                            path="/orders/v0/orders",
+                            query=country_params,
+                        )
+
+                    country_resp = _call_country()
+                    country_debug = country_resp.get("debug") or {}
+                    country_request_id = country_debug.get("request_id") or country_debug.get("rid")
+                    country_body_value = country_resp.get("payload")
+                    country_body_text = (
+                        _truncate_text(country_body_value, 2000)
+                        if compact
+                        else _truncate_text(country_body_value, 200000)
+                    )
+                    logger.info(
+                        "event=list_orders_debug;run_id=%s;status_code=%s;request_id=%s;query=%s",
+                        run_id,
+                        country_resp.get("status"),
+                        country_request_id,
+                        _truncate_text(country_params, 1000),
+                    )
+                    debug["list_orders_by_country"][cc] = {
+                        "status_code": country_resp.get("status"),
+                        "request_id": country_request_id,
+                        "rid": country_debug.get("rid"),
+                        "path": "/orders/v0/orders",
+                        "query": country_params,
+                        "query_keys": {
+                            "CreatedAfter": country_params.get("CreatedAfter"),
+                            "CreatedBefore": country_params.get("CreatedBefore"),
+                            "MarketplaceIds": country_params.get("MarketplaceIds"),
+                            "OrderStatuses": country_params.get("OrderStatuses"),
+                        },
+                        "error": country_resp.get("error"),
+                        "body": country_body_text,
+                        "country": cc,
+                        "marketplace_id": mid,
+                    }
         payload = resp.get("payload") or {}
         if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
             payload = payload.get("payload") or {}
