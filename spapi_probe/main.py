@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 import logging
+import os
 import sys
 from datetime import date as date_type
 from typing import Optional
@@ -21,6 +22,30 @@ logger = logging.getLogger("spapi_main")
 logger.info("Service Initializing...")
 
 app = FastAPI()
+
+LOCAL_BLOCKED_STATUS = "LOCAL_EXEC_BLOCKED"
+DRY_RUN_STATUS = "DRY_RUN"
+
+def _is_cloud_run() -> bool:
+    return bool((os.getenv("K_SERVICE") or "").strip())
+
+def _local_block_response(run_id: str, stage: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "ok": False,
+            "status": LOCAL_BLOCKED_STATUS,
+            "error": "Local execution blocked. Use Cloud Run for SP-API calls.",
+            "run_id": run_id,
+            "stage": stage,
+        },
+        status_code=200,
+    )
+
+def _dry_run_response(payload: dict) -> JSONResponse:
+    payload["ok"] = True
+    payload["status"] = DRY_RUN_STATUS
+    payload["stage"] = "dry_run"
+    return JSONResponse(payload, status_code=200)
 
 @app.on_event("startup")
 async def startup_event():
@@ -45,6 +70,7 @@ def cron_daily(
 ):
     scope_u = scope.upper()
     tz = tz_for_scope(scope_u)
+    run_id = str(uuid.uuid4())
 
     if snapshot_date:
         y = int(snapshot_date[0:4])
@@ -54,11 +80,37 @@ def cron_daily(
     else:
         snap = yesterday_local(tz)
 
+    dry_int = int(dry)
+    if dry_int != 1 and not _is_cloud_run():
+        return _local_block_response(run_id, stage="orders_list")
+
+    if dry_int == 1:
+        return _dry_run_response(
+            {
+                "run_id": run_id,
+                "scope": scope_u,
+                "snapshot_date": str(snap),
+                "dry": True,
+                "steps": [
+                    "Fetch orders list (paginated)",
+                    "Fetch order items for each order",
+                    "Aggregate orders/items/ASIN stats",
+                    "Write results to BigQuery (skipped in dry run)",
+                ],
+                "params": {
+                    "filter_mode": filterMode,
+                    "max_pages": int(maxPages),
+                    "page_size": int(pageSize),
+                    "max_orders": int(maxOrders),
+                },
+            }
+        )
+
     try:
         out = run_daily(
             scope=scope_u,
             snapshot_date=snap,
-            dry=bool(int(dry)),
+            dry=bool(dry_int),
             debug_items=bool(int(debugItems)),
             compact=bool(int(compact)),
             filter_mode=filterMode,
@@ -96,8 +148,28 @@ def cron_inventory(
     Fetches current inventory (FBA + AWD) for the given scope.
     Snapshot date is UTC Today.
     """
+    run_id = str(uuid.uuid4())
+    dry_int = int(dry)
+
+    if dry_int != 1 and not _is_cloud_run():
+        return _local_block_response(run_id, stage="fba_summary")
+
+    if dry_int == 1:
+        return _dry_run_response(
+            {
+                "run_id": run_id,
+                "scope": scope.upper(),
+                "dry": True,
+                "steps": [
+                    "Fetch FBA inventory summaries",
+                    "Fetch AWD inventory (NA only)",
+                    "Write inventory snapshots to BigQuery (skipped in dry run)",
+                ],
+            }
+        )
+
     try:
-        out = run_inventory(scope=scope.upper(), dry=bool(int(dry)))
+        out = run_inventory(scope=scope.upper(), dry=bool(dry_int))
         return JSONResponse(out)
     except SpapiRequestError as e:
         payload = e.to_dict()

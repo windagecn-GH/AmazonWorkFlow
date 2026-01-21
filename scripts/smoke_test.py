@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -40,11 +41,65 @@ def main() -> None:
     if fastapi_spec is None:
         print("fastapi_missing", True)
     else:
-        from spapi_probe.main import app  # noqa: E402
+        from spapi_probe.main import app, cron_daily, cron_inventory  # noqa: E402
         print("app_title", getattr(app, "title", "unknown"))
     print("bq_dataset", config.BQ_DATASET)
     _run_spapi_shape_tests()
     print("spapi_shape_tests", "ok")
+
+    if fastapi_spec is not None:
+        prev_k_service = os.environ.pop("K_SERVICE", None)
+        try:
+            daily_resp = cron_daily(
+                scope="EU",
+                snapshot_date="2026-01-17",
+                dry=0,
+                debugItems=0,
+                compact=1,
+                filterMode="Created",
+                maxPages=1,
+                pageSize=1,
+                maxOrders=1,
+            )
+            daily_body = getattr(daily_resp, "body", b"{}")
+            daily_data = json.loads(daily_body.decode("utf-8"))
+            assert daily_data.get("status") == "LOCAL_EXEC_BLOCKED"
+            assert daily_data.get("run_id")
+            assert daily_data.get("stage")
+            assert daily_data.get("error")
+
+            daily_dry_resp = cron_daily(
+                scope="EU",
+                snapshot_date="2026-01-17",
+                dry=1,
+                debugItems=0,
+                compact=1,
+                filterMode="Created",
+                maxPages=1,
+                pageSize=1,
+                maxOrders=1,
+            )
+            daily_dry_body = getattr(daily_dry_resp, "body", b"{}")
+            daily_dry_data = json.loads(daily_dry_body.decode("utf-8"))
+            assert daily_dry_data.get("status") == "DRY_RUN"
+            assert daily_dry_data.get("run_id")
+
+            inv_resp = cron_inventory(scope="EU", dry=0)
+            inv_body = getattr(inv_resp, "body", b"{}")
+            inv_data = json.loads(inv_body.decode("utf-8"))
+            assert inv_data.get("status") == "LOCAL_EXEC_BLOCKED"
+            assert inv_data.get("run_id")
+            assert inv_data.get("stage")
+
+            inv_dry_resp = cron_inventory(scope="EU", dry=1)
+            inv_dry_body = getattr(inv_dry_resp, "body", b"{}")
+            inv_dry_data = json.loads(inv_dry_body.decode("utf-8"))
+            assert inv_dry_data.get("status") == "DRY_RUN"
+            assert inv_dry_data.get("run_id")
+            print("local_block_tests", "ok")
+        finally:
+            if prev_k_service is not None:
+                os.environ["K_SERVICE"] = prev_k_service
 
 
 if __name__ == "__main__":
