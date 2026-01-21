@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
@@ -79,6 +79,33 @@ def _get_env_required(name: str) -> str:
         raise RuntimeError(f"Missing required env var: {name}")
     return v
 
+def _normalize_scope(scope: str) -> str:
+    scope_u = (scope or "NA").upper()
+    if scope_u == "UK":
+        return "EU"
+    if scope_u in ("US", "CA", "MX", "BR"):
+        return "NA"
+    return scope_u
+
+def _refresh_token_candidates(scope: str) -> List[str]:
+    scope_u = _normalize_scope(scope)
+    if scope_u == "EU":
+        return ["LWA_REFRESH_TOKEN_EU", "LWA_REFRESH_TOKEN"]
+    if scope_u == "NA":
+        return ["LWA_REFRESH_TOKEN_NA", "LWA_REFRESH_TOKEN"]
+    return ["LWA_REFRESH_TOKEN"]
+
+def _select_refresh_token(scope: str) -> str:
+    candidates = _refresh_token_candidates(scope)
+    for name in candidates:
+        val = os.getenv(name)
+        if val:
+            return val
+    scope_u = _normalize_scope(scope)
+    raise RuntimeError(
+        f"Missing refresh token for scope {scope_u}. Checked envs: {', '.join(candidates)}"
+    )
+
 
 def _get_lwa_access_token(region: str) -> Tuple[str, Dict[str, Any]]:
     """
@@ -86,7 +113,7 @@ def _get_lwa_access_token(region: str) -> Tuple[str, Dict[str, Any]]:
     Caches per-region token in memory (Cloud Run instance).
     """
     debug: Dict[str, Any] = {}
-    region = (region or "NA").upper()
+    region = _normalize_scope(region)
 
     cache_key = f"lwa:{region}"
     cached = _LWA_TOKEN_CACHE.get(cache_key)
@@ -104,10 +131,7 @@ def _get_lwa_access_token(region: str) -> Tuple[str, Dict[str, Any]]:
     client_id = _get_env_required("LWA_CLIENT_ID")
     client_secret = _get_env_required("LWA_CLIENT_SECRET")
 
-    refresh_env = _REGION_TO_REFRESH_ENV.get(region, "LWA_REFRESH_TOKEN")
-    refresh_token = os.getenv(refresh_env) or os.getenv("LWA_REFRESH_TOKEN")
-    if not refresh_token:
-        raise RuntimeError(f"Missing refresh token env var: {refresh_env} (or LWA_REFRESH_TOKEN)")
+    refresh_token = _select_refresh_token(region)
 
     token_url = "https://api.amazon.com/auth/o2/token"
     payload = {
@@ -195,7 +219,7 @@ def spapi_request(
     Args:
         scope: "NA", "EU", or "FE". Maps to region.
     """
-    region = (scope or "NA").upper()
+    region = _normalize_scope(scope)
     method = (method or "GET").upper()
 
     host = _REGION_TO_HOST.get(region, _REGION_TO_HOST["NA"])

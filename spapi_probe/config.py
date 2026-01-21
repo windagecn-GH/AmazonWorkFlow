@@ -5,6 +5,8 @@ from typing import Dict, List, Tuple
 LWA_CLIENT_ID = os.getenv("LWA_CLIENT_ID", "")
 LWA_CLIENT_SECRET = os.getenv("LWA_CLIENT_SECRET", "")
 LWA_REFRESH_TOKEN = os.getenv("LWA_REFRESH_TOKEN", "")
+LWA_REFRESH_TOKEN_EU = os.getenv("LWA_REFRESH_TOKEN_EU", "")
+LWA_REFRESH_TOKEN_NA = os.getenv("LWA_REFRESH_TOKEN_NA", "")
 
 # ---- AWS SigV4 ----
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
@@ -117,10 +119,14 @@ def tz_for_scope(scope: str) -> str:
     return SCOPE_TZ.get(scope.upper(), "UTC")
 
 def require_env() -> Tuple[bool, Dict[str, bool]]:
+    refresh_ready = bool(LWA_REFRESH_TOKEN_EU or LWA_REFRESH_TOKEN_NA or LWA_REFRESH_TOKEN)
     checks = {
         "LWA_CLIENT_ID": bool(LWA_CLIENT_ID),
         "LWA_CLIENT_SECRET": bool(LWA_CLIENT_SECRET),
+        "LWA_REFRESH_TOKEN_EU": bool(LWA_REFRESH_TOKEN_EU),
+        "LWA_REFRESH_TOKEN_NA": bool(LWA_REFRESH_TOKEN_NA),
         "LWA_REFRESH_TOKEN": bool(LWA_REFRESH_TOKEN),
+        "LWA_REFRESH_TOKEN_READY": refresh_ready,
         "AWS_ACCESS_KEY_ID": bool(AWS_ACCESS_KEY_ID),
         "AWS_SECRET_ACCESS_KEY": bool(AWS_SECRET_ACCESS_KEY),
         "BQ_PROJECT": bool(BQ_PROJECT),

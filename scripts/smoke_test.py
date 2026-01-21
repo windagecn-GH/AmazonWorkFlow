@@ -35,6 +35,46 @@ def _run_spapi_shape_tests() -> None:
     finally:
         spapi_core.spapi_request = original
 
+def _run_refresh_token_selection_tests() -> None:
+    from spapi_probe import spapi_client  # noqa: E402
+
+    keys = [
+        "LWA_REFRESH_TOKEN_EU",
+        "LWA_REFRESH_TOKEN_NA",
+        "LWA_REFRESH_TOKEN",
+    ]
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+
+        os.environ["LWA_REFRESH_TOKEN_EU"] = "eu-token"
+        assert spapi_client._select_refresh_token("EU") == "eu-token"
+
+        os.environ.pop("LWA_REFRESH_TOKEN_EU", None)
+        os.environ["LWA_REFRESH_TOKEN_NA"] = "na-token"
+        assert spapi_client._select_refresh_token("US") == "na-token"
+
+        os.environ.pop("LWA_REFRESH_TOKEN_NA", None)
+        os.environ["LWA_REFRESH_TOKEN"] = "fallback-token"
+        assert spapi_client._select_refresh_token("EU") == "fallback-token"
+
+        os.environ.pop("LWA_REFRESH_TOKEN", None)
+        try:
+            spapi_client._select_refresh_token("EU")
+            assert False, "expected missing refresh token error"
+        except RuntimeError as exc:
+            msg = str(exc)
+            assert "scope EU" in msg
+            assert "LWA_REFRESH_TOKEN_EU" in msg
+            assert "LWA_REFRESH_TOKEN" in msg
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
 
 def main() -> None:
     fastapi_spec = importlib.util.find_spec("fastapi")
@@ -46,6 +86,8 @@ def main() -> None:
     print("bq_dataset", config.BQ_DATASET)
     _run_spapi_shape_tests()
     print("spapi_shape_tests", "ok")
+    _run_refresh_token_selection_tests()
+    print("refresh_token_tests", "ok")
 
     if fastapi_spec is not None:
         prev_k_service = os.environ.pop("K_SERVICE", None)
