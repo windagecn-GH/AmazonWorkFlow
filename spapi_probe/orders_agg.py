@@ -202,6 +202,8 @@ def fetch_orders_for_scope(
                     "marketplace_id": mid,
                 }
         payload = resp.get("payload") or {}
+        if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
+            payload = payload.get("payload") or {}
         fetched_batch = payload.get("Orders") or []
         
         for o in fetched_batch:
@@ -571,6 +573,10 @@ def run_daily(
         include_debug=debug_items,
         compact=compact,
     )
+    status_breakdown: Dict[str, int] = {}
+    for o in orders:
+        key = (o.order_status or "").strip() or "UNKNOWN"
+        status_breakdown[key] = status_breakdown.get(key, 0) + 1
 
     totals, raw_orders, raw_items, asin_rows = process_orders_and_items(
         scope, orders, debug_items=debug_items, run_id=run_id
@@ -606,6 +612,8 @@ def run_daily(
         resp["debug"] = {
             "list_orders": tw_debug.get("list_orders") or {},
             "list_orders_by_country": tw_debug.get("list_orders_by_country") or {},
+            "parsed_orders_len": len(orders),
+            "parsed_status_breakdown": status_breakdown,
         }
 
     return resp

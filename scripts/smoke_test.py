@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import types
+from datetime import date
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
@@ -75,6 +76,57 @@ def _run_refresh_token_selection_tests() -> None:
             else:
                 os.environ[k] = v
 
+def _run_orders_parse_tests() -> None:
+    from spapi_probe import orders_agg  # noqa: E402
+
+    original = orders_agg.spapi_request_json
+    try:
+        def _mock_spapi_request_json(*, scope: str, method: str, path: str, query=None, **_kwargs):
+            if path == "/orders/v0/orders":
+                return {
+                    "ok": True,
+                    "status": 200,
+                    "payload": {
+                        "payload": {
+                            "Orders": [
+                                {
+                                    "AmazonOrderId": "ORDER1",
+                                    "MarketplaceId": "A1PA6795UKMFR9",
+                                    "OrderStatus": "Shipped",
+                                    "SalesChannel": "Amazon",
+                                }
+                            ],
+                            "NextToken": None,
+                        }
+                    },
+                    "debug": {"rid": "x"},
+                }
+            if path.endswith("/orderItems"):
+                return {
+                    "ok": True,
+                    "status": 200,
+                    "payload": {"payload": {"OrderItems": []}},
+                    "debug": {"rid": "y"},
+                }
+            return {"ok": False, "status": 404, "payload": {}, "error": "not found", "debug": {}}
+
+        orders_agg.spapi_request_json = _mock_spapi_request_json
+        out = orders_agg.run_daily(
+            scope="EU",
+            snapshot_date=date(2026, 1, 17),
+            dry=True,
+            debug_items=True,
+            compact=True,
+            filter_mode="Created",
+            max_pages=1,
+            page_size=1,
+            max_orders=10,
+        )
+        debug = out.get("debug") or {}
+        assert debug.get("parsed_orders_len", 0) > 0
+    finally:
+        orders_agg.spapi_request_json = original
+
 
 def main() -> None:
     fastapi_spec = importlib.util.find_spec("fastapi")
@@ -88,6 +140,8 @@ def main() -> None:
     print("spapi_shape_tests", "ok")
     _run_refresh_token_selection_tests()
     print("refresh_token_tests", "ok")
+    _run_orders_parse_tests()
+    print("orders_parse_tests", "ok")
 
     if fastapi_spec is not None:
         prev_k_service = os.environ.pop("K_SERVICE", None)
