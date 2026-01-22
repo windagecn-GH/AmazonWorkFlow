@@ -2,12 +2,12 @@
 
 This folder contains helper SQL files for BigQuery schema alignment and validation.
 
-Before running, confirm your gcloud project is set and you have access to BigQuery:
-gcloud config get-value project
-bq ls
-
 BigQuery migration:
-bq query --use_legacy_sql=false < scripts/bq_migrations.sql
+- Open `scripts/bq_migrations.sql` in the BigQuery console (or your SQL runner).
+- Adjust the dataset/project names if they differ from your environment.
+- Run the statements to align schema changes.
 
 BigQuery validation:
-bq query --use_legacy_sql=false < scripts/bq_validation.sql
+- Open `scripts/bq_validation.sql` in the BigQuery console (or your SQL runner).
+- Set `p_scope` and `p_snapshot_date` to the run you want to validate.
+- Review the latest-ingested counts and distinct key counts for raw items and ASIN daily.
