@@ -5,7 +5,7 @@
 DECLARE p_scope STRING DEFAULT 'EU';
 DECLARE p_snapshot_date DATE DEFAULT DATE '2026-01-17';
 
--- Step 1: Raw items table, latest ingested_at, row_count vs distinct key count
+-- Raw items table, latest ingested_at, row_count vs distinct key count
 WITH latest_items AS (
   SELECT
     MAX(ingested_at) AS max_ingested_at
@@ -24,7 +24,7 @@ JOIN latest_items li
 WHERE oi.scope = p_scope AND oi.snapshot_date = p_snapshot_date
 GROUP BY 1,2,3;
 
--- Step 2: ASIN daily table, latest ingested_at, row_count vs distinct key count
+-- ASIN daily table, latest ingested_at, row_count vs distinct key count
 WITH latest_asin AS (
   SELECT
     MAX(ingested_at) AS max_ingested_at
