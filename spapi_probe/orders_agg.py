@@ -366,6 +366,7 @@ def process_orders_and_items(
     asin_agg: Dict[Tuple[str, str, str], Dict[str, int]] = {}
     seen_non_canceled: set[Tuple[str, str]] = set()
     seen_canceled: set[Tuple[str, str]] = set()
+    order_items_by_country: Dict[str, Dict[str, Any]] = {}
 
     for i, o in enumerate(orders):
         cc = country_for_marketplace_id(scope, o.marketplace_id)
@@ -377,6 +378,19 @@ def process_orders_and_items(
             if order_key not in seen_canceled:
                 totals["canceled_orders"] += 1
                 seen_canceled.add(order_key)
+
+        items_debug = order_items_by_country.setdefault(
+            cc,
+            {
+                "orders_in_batch": 0,
+                "items_fetched": 0,
+                "items_after_filter": 0,
+                "first_error": None,
+                "http_status": None,
+                "spapi_status": None,
+            },
+        )
+        items_debug["orders_in_batch"] += 1
 
         sales_channel = (o.sales_channel or "").strip()
         sc_l = sales_channel.lower()
@@ -409,6 +423,27 @@ def process_orders_and_items(
             items_resp = _retry_spapi(_call_items, stage="order_items", run_id=run_id)
             payload = _unwrap_spapi_payload(items_resp.get("payload") or {})
             items_list = payload.get("OrderItems") or []
+            items_debug["http_status"] = items_resp.get("status")
+            items_debug["spapi_status"] = items_resp.get("status")
+            if not isinstance(payload, dict) or "OrderItems" not in payload:
+                msg = "OrderItems missing in response payload"
+                if not items_debug["first_error"]:
+                    items_debug["first_error"] = msg
+                raise SpapiRequestError(
+                    message=msg,
+                    status=int(items_resp.get("status") or 0),
+                    stage="fetch_order_items",
+                    run_id=run_id,
+                    debug={
+                        "order_id": o.amazon_order_id,
+                        "marketplace_id": o.marketplace_id,
+                        "country": cc,
+                        "payload_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
+                        "order_items_by_country": order_items_by_country,
+                    },
+                )
+            if isinstance(items_list, list):
+                items_debug["items_fetched"] += len(items_list)
             if debug_items and i == 0:
                 try:
                     totals["_debug_order_items_sample"] = {
@@ -429,7 +464,7 @@ def process_orders_and_items(
                 # Check cancellation at item level? Usually we use order status, 
                 # but item level also has QuantityCancelled.
                 units = _extract_item_units(it)
-                
+
                 # Add to Item Raw Rows
                 raw_items_rows.append({
                     "amazon_order_id": o.amazon_order_id,
@@ -442,16 +477,44 @@ def process_orders_and_items(
                     "marketplace_id": o.marketplace_id,
                 })
 
-                if is_valid_sale:
+                if is_valid_sale and units > 0:
                     units_in_order += units
+                    items_debug["items_after_filter"] += 1
                 if asin:
                     per_order_asin_units[asin] = per_order_asin_units.get(asin, 0) + units
 
-        except SpapiRequestError:
-            raise
+        except SpapiRequestError as e:
+            if not items_debug["first_error"]:
+                items_debug["first_error"] = e.message
+            raise SpapiRequestError(
+                message=e.message,
+                status=e.status,
+                stage="fetch_order_items",
+                run_id=run_id,
+                debug={
+                    **(e.debug or {}),
+                    "order_id": o.amazon_order_id,
+                    "marketplace_id": o.marketplace_id,
+                    "country": cc,
+                    "order_items_by_country": order_items_by_country,
+                },
+            )
         except Exception as e:
             logger.error(json.dumps({"event": "fetch_items_error", "order_id": o.amazon_order_id, "error": str(e), "run_id": run_id}))
-            raise
+            if not items_debug["first_error"]:
+                items_debug["first_error"] = str(e)
+            raise SpapiRequestError(
+                message=str(e),
+                status=0,
+                stage="fetch_order_items",
+                run_id=run_id,
+                debug={
+                    "order_id": o.amazon_order_id,
+                    "marketplace_id": o.marketplace_id,
+                    "country": cc,
+                    "order_items_by_country": order_items_by_country,
+                },
+            )
 
         for asin, units in per_order_asin_units.items():
             key = (cc, o.marketplace_id, asin)
@@ -516,6 +579,7 @@ def process_orders_and_items(
             "canceled_orders": stats["canceled_orders"]
         })
 
+    totals["_debug_order_items_by_country"] = order_items_by_country
     return totals, raw_orders_rows, raw_items_rows, asin_daily_rows
 
 def _bq_insert_with_fallback(
@@ -723,13 +787,14 @@ def run_daily(
         "time_window_debug": tw_debug,
     }
 
-    if debug_items:
+    if debug_items or not compact:
         resp["debug"] = {
             "list_orders": tw_debug.get("list_orders") or {},
             "list_orders_by_country": tw_debug.get("list_orders_by_country") or {},
             "parsed_orders_len": len(orders),
             "parsed_status_breakdown": status_breakdown,
             "order_items_sample": totals.get("_debug_order_items_sample") or {},
+            "order_items_by_country": totals.get("_debug_order_items_by_country") or {},
             "agg_pre": {
                 "total_orders": len(orders),
                 "by_marketplace_id": agg_pre_by_marketplace,
@@ -741,5 +806,26 @@ def run_daily(
                 ),
             },
         }
+
+    if totals["orders_count"] > 0 and len(raw_items) == 0:
+        err_resp = {
+            "ok": False,
+            "status": "ITEMS_EMPTY",
+            "error": "Order items fetch returned zero items for non-empty orders.",
+            "stage": "fetch_order_items",
+            "run_id": run_id,
+            "scope": scope,
+            "orders_count": totals["orders_count"],
+            "orders_raw_total": tw_debug.get("orders_raw_total", 0),
+            "orders_canceled_total": tw_debug.get("orders_canceled_total", 0),
+            "units_sold": totals["units_sold"],
+            "breakdown": totals["breakdown"],
+            "items_rows_count": len(raw_items),
+            "asin_stats_count": len(asin_rows),
+            "time_window_debug": tw_debug,
+        }
+        if debug_items or not compact:
+            err_resp["debug"] = resp.get("debug", {})
+        return err_resp
 
     return resp
