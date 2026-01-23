@@ -14,6 +14,15 @@ if importlib.util.find_spec("requests") is None:
 
 from spapi_probe import spapi_core  # noqa: E402
 
+YEAR = 2026
+MONTH = 1
+DAY = 17
+ZERO = 0
+ONE = 1
+DRY_FALSE = 0
+DRY_TRUE = 1
+SMALL_ONE = 1
+
 
 def _run_spapi_shape_tests() -> None:
     original = spapi_core.spapi_request
@@ -133,20 +142,20 @@ def _run_orders_parse_tests() -> None:
         orders_agg.spapi_request_json = _mock_spapi_request_json
         out = orders_agg.run_daily(
             scope="EU",
-            snapshot_date=date(2026, 1, 17),
+            snapshot_date=date(YEAR, MONTH, DAY),
             dry=True,
             debug_items=True,
             compact=True,
             filter_mode="Created",
-            max_pages=1,
-            page_size=1,
+            max_pages=SMALL_ONE,
+            page_size=SMALL_ONE,
             max_orders=10,
         )
         debug = out.get("debug") or {}
-        assert debug.get("parsed_orders_len", 0) > 0
-        assert out.get("orders_count", 0) == 1
-        assert out.get("canceled_orders", 0) == 1
-        assert out.get("units_sold", 0) > 0
+        assert debug.get("parsed_orders_len", ZERO) > ZERO
+        assert out.get("orders_count", ZERO) == ONE
+        assert out.get("canceled_orders", ZERO) == ONE
+        assert out.get("units_sold", ZERO) > ZERO
         by_country = debug.get("list_orders_by_country") or {}
         for entry in by_country.values():
             query = (entry or {}).get("query") or {}
@@ -179,19 +188,19 @@ def _run_list_orders_debug_shape_tests() -> None:
         orders_agg.spapi_request_json = _mock_spapi_request_json
         out = orders_agg.run_daily(
             scope="EU",
-            snapshot_date=date(2026, 1, 17),
+            snapshot_date=date(YEAR, MONTH, DAY),
             dry=True,
             debug_items=True,
             compact=True,
             filter_mode="Created",
-            max_pages=1,
-            page_size=1,
+            max_pages=SMALL_ONE,
+            page_size=SMALL_ONE,
             max_orders=10,
         )
         debug = out.get("debug") or {}
         by_country = debug.get("list_orders_by_country") or {}
         sample = next(iter(by_country.values()), {})
-        assert sample.get("orders_in_batch") == 1
+        assert sample.get("orders_in_batch") == ONE
         assert sample.get("has_next_token") is True
     finally:
         orders_agg.spapi_request_json = original
@@ -220,7 +229,7 @@ def main() -> None:
             daily_resp = cron_daily(
                 scope="EU",
                 snapshot_date="2026-01-17",
-                dry=0,
+                dry=DRY_FALSE,
                 debugItems=0,
                 compact=1,
                 filterMode="Created",
@@ -238,7 +247,7 @@ def main() -> None:
             daily_dry_resp = cron_daily(
                 scope="EU",
                 snapshot_date="2026-01-17",
-                dry=1,
+                dry=DRY_TRUE,
                 debugItems=0,
                 compact=1,
                 filterMode="Created",
@@ -251,14 +260,14 @@ def main() -> None:
             assert daily_dry_data.get("status") == "DRY_RUN"
             assert daily_dry_data.get("run_id")
 
-            inv_resp = cron_inventory(scope="EU", dry=0)
+            inv_resp = cron_inventory(scope="EU", dry=DRY_FALSE)
             inv_body = getattr(inv_resp, "body", b"{}")
             inv_data = json.loads(inv_body.decode("utf-8"))
             assert inv_data.get("status") == "LOCAL_EXEC_BLOCKED"
             assert inv_data.get("run_id")
             assert inv_data.get("stage")
 
-            inv_dry_resp = cron_inventory(scope="EU", dry=1)
+            inv_dry_resp = cron_inventory(scope="EU", dry=DRY_TRUE)
             inv_dry_body = getattr(inv_dry_resp, "body", b"{}")
             inv_dry_data = json.loads(inv_dry_body.decode("utf-8"))
             assert inv_dry_data.get("status") == "DRY_RUN"

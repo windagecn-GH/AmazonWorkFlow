@@ -119,19 +119,30 @@ def tz_for_scope(scope: str) -> str:
     return SCOPE_TZ.get(scope.upper(), "UTC")
 
 def require_env() -> Tuple[bool, Dict[str, bool]]:
-    refresh_ready = bool(LWA_REFRESH_TOKEN_EU or LWA_REFRESH_TOKEN_NA or LWA_REFRESH_TOKEN)
+    lwa_client_id = os.getenv("LWA_CLIENT_ID", "")
+    lwa_client_secret = os.getenv("LWA_CLIENT_SECRET", "")
+    lwa_refresh_token = os.getenv("LWA_REFRESH_TOKEN", "")
+    lwa_refresh_token_eu = os.getenv("LWA_REFRESH_TOKEN_EU", "")
+    lwa_refresh_token_na = os.getenv("LWA_REFRESH_TOKEN_NA", "")
+    aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID", "")
+    aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    bq_project = os.getenv("BQ_PROJECT", "")
+    bq_dataset = os.getenv("BQ_DATASET", "")
+    bq_table_orders = os.getenv("BQ_TABLE_ORDERS", "probe_orders_raw_v1")
+
+    refresh_ready = bool(lwa_refresh_token_eu or lwa_refresh_token_na or lwa_refresh_token)
     checks = {
-        "LWA_CLIENT_ID": bool(LWA_CLIENT_ID),
-        "LWA_CLIENT_SECRET": bool(LWA_CLIENT_SECRET),
-        "LWA_REFRESH_TOKEN_EU": bool(LWA_REFRESH_TOKEN_EU),
-        "LWA_REFRESH_TOKEN_NA": bool(LWA_REFRESH_TOKEN_NA),
-        "LWA_REFRESH_TOKEN": bool(LWA_REFRESH_TOKEN),
+        "LWA_CLIENT_ID": bool(lwa_client_id),
+        "LWA_CLIENT_SECRET": bool(lwa_client_secret),
+        "LWA_REFRESH_TOKEN_EU": bool(lwa_refresh_token_eu),
+        "LWA_REFRESH_TOKEN_NA": bool(lwa_refresh_token_na),
+        "LWA_REFRESH_TOKEN": bool(lwa_refresh_token),
         "LWA_REFRESH_TOKEN_READY": refresh_ready,
-        "AWS_ACCESS_KEY_ID": bool(AWS_ACCESS_KEY_ID),
-        "AWS_SECRET_ACCESS_KEY": bool(AWS_SECRET_ACCESS_KEY),
-        "BQ_PROJECT": bool(BQ_PROJECT),
-        "BQ_DATASET": bool(BQ_DATASET),
-        "BQ_TABLE_ORDERS": bool(BQ_TABLE_ORDERS),
+        "AWS_ACCESS_KEY_ID": bool(aws_access_key_id),
+        "AWS_SECRET_ACCESS_KEY": bool(aws_secret_access_key),
+        "BQ_PROJECT": bool(bq_project),
+        "BQ_DATASET": bool(bq_dataset),
+        "BQ_TABLE_ORDERS": bool(bq_table_orders),
     }
     required = [
         checks["LWA_CLIENT_ID"],
