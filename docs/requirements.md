@@ -32,6 +32,12 @@ Deduplication requires duplicate keys to be zero in raw items and ASIN daily for
 Observability requires failure when orders_count is greater than zero but items_rows_count is zero, including status, error, run_id, and stage fields.
 Debugging requires per-country item fetch statistics when debug is enabled, with clear field semantics.
 
+# Release Verification Criteria
+New revisions must be validated using a revision or tag URL before any traffic is shifted.
+Traffic must only be shifted after the revision or tag URL passes strict verification with dry false, debug enabled, and compact disabled.
+After traffic shift, the service URL must pass verification with key assertions enforced.
+Transient network failures must be reported as structured errors, and retries are allowed but must be observable.
+
 # Single Source of Truth
 docs/requirements.md is authoritative for requirements and acceptance criteria.
 README.md is authoritative for how to run and validate in a human readable way.

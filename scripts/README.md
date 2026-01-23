@@ -11,3 +11,5 @@ Where to look
 Notes
 - scripts/bq_validation.sql is the single source of truth for BigQuery validation queries
 - Use scripts/README.md only as a pointer to authoritative sources, not as a rule book
+- scripts/verify_endpoint.py validates Cloud Run endpoint responses for revision or tag URLs and service URLs
+- Verification acceptance criteria live in docs/requirements.md
