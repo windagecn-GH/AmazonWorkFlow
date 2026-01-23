@@ -133,4 +133,14 @@ def require_env() -> Tuple[bool, Dict[str, bool]]:
         "BQ_DATASET": bool(BQ_DATASET),
         "BQ_TABLE_ORDERS": bool(BQ_TABLE_ORDERS),
     }
-    return all(checks.values()), checks
+    required = [
+        checks["LWA_CLIENT_ID"],
+        checks["LWA_CLIENT_SECRET"],
+        checks["LWA_REFRESH_TOKEN_READY"],
+        checks["AWS_ACCESS_KEY_ID"],
+        checks["AWS_SECRET_ACCESS_KEY"],
+        checks["BQ_PROJECT"],
+        checks["BQ_DATASET"],
+        checks["BQ_TABLE_ORDERS"],
+    ]
+    return all(required), checks
