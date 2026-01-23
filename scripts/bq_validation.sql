@@ -1,6 +1,6 @@
 -- BigQuery validation queries for ASIN ingestion.
 -- Adjust snapshot_date and scope as needed.
--- Replace dataset/project names if they differ from amazon_ops.
+-- Replace dataset and project names if they differ from amazon_ops.
 
 DECLARE p_scope STRING DEFAULT 'EU';
 DECLARE p_snapshot_date DATE DEFAULT DATE '2026-01-17';
