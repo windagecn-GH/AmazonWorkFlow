@@ -33,6 +33,7 @@ Progress Log
   - probe_sales_asin_daily_v1 latest ingested_at 2026-01-23 04:55:17 row_count 33 distinct_key_count 33
   - Duplicate-key checks PASS with duplicate_key_rows 0 for both tables
 - verify-items behavior confirmed with non-zero orders_count, units_sold, items_rows_count, and asin_stats_count
+- order items empty handling updated to return ok false with stage order_items and per-marketplace debug when dry is false and items are zero
 
 Next Steps
 - Merge fixes to main and validate with primary traffic

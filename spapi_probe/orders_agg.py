@@ -335,6 +335,7 @@ def process_orders_and_items(
     *,
     debug_items: bool = False,
     run_id: str = "debug",
+    window_info: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Returns:
@@ -367,6 +368,21 @@ def process_orders_and_items(
     seen_non_canceled: set[Tuple[str, str]] = set()
     seen_canceled: set[Tuple[str, str]] = set()
     order_items_by_country: Dict[str, Dict[str, Any]] = {}
+    window_payload = window_info or {}
+    for cc, mid in mp_map.items():
+        order_items_by_country[cc] = {
+            "orders_in_batch": 0,
+            "items_fetched": 0,
+            "items_after_filter": 0,
+            "first_error": None,
+            "http_status": None,
+            "spapi_status": None,
+            "marketplace_id": mid,
+            "window": {
+                "dt_start_utc": window_payload.get("dt_start_utc"),
+                "dt_end_utc": window_payload.get("dt_end_utc_raw"),
+            },
+        }
 
     for i, o in enumerate(orders):
         cc = country_for_marketplace_id(scope, o.marketplace_id)
@@ -388,6 +404,11 @@ def process_orders_and_items(
                 "first_error": None,
                 "http_status": None,
                 "spapi_status": None,
+                "marketplace_id": o.marketplace_id,
+                "window": {
+                    "dt_start_utc": window_payload.get("dt_start_utc"),
+                    "dt_end_utc": window_payload.get("dt_end_utc_raw"),
+                },
             },
         )
         items_debug["orders_in_batch"] += 1
@@ -479,7 +500,7 @@ def process_orders_and_items(
 
                 if is_valid_sale and units > 0:
                     units_in_order += units
-                    items_debug["items_after_filter"] += 1
+                    items_debug["items_after_filter"] += units
                 if asin:
                     per_order_asin_units[asin] = per_order_asin_units.get(asin, 0) + units
 
@@ -754,7 +775,7 @@ def run_daily(
         status_breakdown[key] = status_breakdown.get(key, 0) + 1
 
     totals, raw_orders, raw_items, asin_rows = process_orders_and_items(
-        scope, orders, debug_items=debug_items, run_id=run_id
+        scope, orders, debug_items=debug_items, run_id=run_id, window_info=tw_debug
     )
 
     bq_res = write_bigquery(
@@ -807,12 +828,12 @@ def run_daily(
             },
         }
 
-    if totals["orders_count"] > 0 and len(raw_items) == 0:
+    if (not dry) and totals["orders_count"] > 0 and len(raw_items) == 0:
         err_resp = {
             "ok": False,
-            "status": "ITEMS_EMPTY",
-            "error": "Order items fetch returned zero items for non-empty orders.",
-            "stage": "fetch_order_items",
+            "status": "ORDER_ITEMS_EMPTY",
+            "error": "orders_count>0 but no order items produced; see debug.order_items_by_country for per-marketplace details",
+            "stage": "order_items",
             "run_id": run_id,
             "scope": scope,
             "orders_count": totals["orders_count"],
