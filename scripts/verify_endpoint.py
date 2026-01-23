@@ -31,6 +31,14 @@ def _error_result(error_type: str, message: str, extra: Optional[Dict[str, Any]]
     return payload
 
 
+def _coerce_int_status(value: Any) -> Optional[int]:
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 def _validate_url(base_url: str) -> Optional[str]:
     if not base_url:
         return "URL is empty"
@@ -44,19 +52,7 @@ def _validate_url(base_url: str) -> Optional[str]:
 
 def _get_auth_token() -> Optional[str]:
     env_token = os.getenv("AUTH_TOKEN", "")
-    if env_token:
-        return env_token
-    try:
-        result = subprocess.run(
-            ["gcloud", "auth", "print-identity-token"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        token = (result.stdout or "").strip()
-        return token or None
-    except Exception:
-        return None
+    return env_token or None
 
 
 def _build_url(base_url: str, path: str, query_params: Dict[str, Any]) -> str:
@@ -169,11 +165,6 @@ def main() -> int:
         _emit(_error_result("URL_INVALID", url_error, {"checked_url": args.url}))
         return 1
 
-    token = _get_auth_token()
-    if not token:
-        _emit(_error_result("AUTH_TOKEN_MISSING", "Failed to obtain identity token", {"checked_url": args.url}))
-        return 1
-
     query_params = {
         "scope": args.scope,
         "snapshot_date": args.snapshot_date,
@@ -185,7 +176,8 @@ def main() -> int:
         "maxOrders": args.max_orders,
     }
     full_url = _build_url(args.url, args.path, query_params)
-    headers = {"Authorization": f"Bearer {token}"}
+    token = _get_auth_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
 
     try:
         response = _make_request(full_url, headers, args.timeout, args.retries)
@@ -256,10 +248,31 @@ def main() -> int:
         )
         return 1
 
-    response_ok = data.get("ok")
+    response_ok = bool(data.get("ok"))
     response_status = data.get("status")
     response_stage = data.get("stage")
     response_run_id = data.get("run_id")
+    status_int = _coerce_int_status(response_status)
+
+    if (response_ok is False) or (status_int is not None and status_int != 200):
+        _emit(
+            _error_result(
+                "RESPONSE_NOT_OK",
+                f"Endpoint returned non-ok response; status={response_status} stage={response_stage}",
+                {
+                    "checked_url": args.url,
+                    "checked_path": args.path,
+                    "query_params": query_params,
+                    "http_status": http_status,
+                    "response_ok": response_ok,
+                    "response_status": response_status,
+                    "response_stage": response_stage,
+                    "response_run_id": response_run_id,
+                    "assertions": [],
+                },
+            )
+        )
+        return 1
     orders_count = data.get("orders_count")
     units_sold = data.get("units_sold")
     items_rows_count = data.get("items_rows_count")

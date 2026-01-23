@@ -37,6 +37,9 @@ New revisions must be validated using a revision or tag URL before any traffic i
 Traffic must only be shifted after the revision or tag URL passes strict verification with dry false, debug enabled, and compact disabled.
 After traffic shift, the service URL must pass verification with key assertions enforced.
 Transient network failures must be reported as structured errors, and retries are allowed but must be observable.
+When response ok is false or response status is not 200, the verifier must return ok false with structured error and skip all success assertions.
+Non-success output must include response_stage, response_run_id, and response_status.
+Success assertions run only when response ok is true and response status is 200.
 
 # Single Source of Truth
 docs/requirements.md is authoritative for requirements and acceptance criteria.
