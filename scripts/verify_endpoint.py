@@ -253,6 +253,12 @@ def main() -> int:
     response_stage = data.get("stage")
     response_run_id = data.get("run_id")
     response_error = data.get("error")
+    bq_sales_daily_agg = ((data.get("bq") or {}).get("sales_daily_agg") or {})
+    bq_sales_daily_agg_diag = {
+        "failed_indexes": bq_sales_daily_agg.get("failed_indexes"),
+        "eu_all_failed": bq_sales_daily_agg.get("eu_all_failed"),
+        "errors_sample": bq_sales_daily_agg.get("errors_sample"),
+    }
     status_int = _coerce_int_status(response_status)
 
     if (response_ok is False) or (status_int is not None and status_int != 200):
@@ -270,6 +276,7 @@ def main() -> int:
                     "response_stage": response_stage,
                     "response_run_id": response_run_id,
                     "response_error": response_error,
+                    "bq_sales_daily_agg_diag": bq_sales_daily_agg_diag,
                     "assertions": [],
                 },
             )
@@ -352,6 +359,7 @@ def main() -> int:
         "response_stage": response_stage,
         "response_run_id": response_run_id,
         "response_error": response_error,
+        "bq_sales_daily_agg_diag": bq_sales_daily_agg_diag,
         "orders_count": orders_count,
         "units_sold": units_sold,
         "items_rows_count": items_rows_count,

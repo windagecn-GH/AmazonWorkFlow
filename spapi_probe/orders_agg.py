@@ -166,6 +166,20 @@ def fetch_orders_for_scope(
         if pages >= max_pages or len(orders) >= max_orders:
             break
 
+        logger.info(json.dumps({
+            "event": "orders_list_call_begin",
+            "run_id": run_id,
+            "stage": "orders_list",
+            "scope": scope,
+            "marketplace_ids": marketplace_ids,
+            "filter_mode": filter_mode,
+            "dt_start_utc": dt_start_utc,
+            "dt_end_utc": dt_end_utc,
+            "page_size": page_size,
+            "max_pages": max_pages,
+            "max_orders": max_orders,
+            "has_next_token": bool(next_token),
+        }))
         params = build_params(",".join(marketplace_ids), include_next_token=True)
 
         def _call():
@@ -176,7 +190,36 @@ def fetch_orders_for_scope(
                 query=params,
             )
 
-        resp = _retry_spapi(_call, stage="orders_list", run_id=run_id)
+        try:
+            resp = _retry_spapi(_call, stage="orders_list", run_id=run_id)
+        except SpapiRequestError as e:
+            logger.exception(json.dumps({
+                "event": "orders_list_failed",
+                "run_id": run_id,
+                "scope": scope,
+                "snapshot_date": str(snapshot_date),
+                "filter_mode": filter_mode,
+                "dt_start_utc": dt_start_utc,
+                "dt_end_utc": dt_end_utc,
+                "marketplace_ids": ",".join(marketplace_ids),
+                "status": e.status,
+                "message": e.message,
+                "debug": e.debug,
+            }))
+            raise
+        except Exception as e:
+            logger.exception(json.dumps({
+                "event": "orders_list_failed",
+                "run_id": run_id,
+                "scope": scope,
+                "snapshot_date": str(snapshot_date),
+                "filter_mode": filter_mode,
+                "dt_start_utc": dt_start_utc,
+                "dt_end_utc": dt_end_utc,
+                "marketplace_ids": ",".join(marketplace_ids),
+                "error": str(e),
+            }))
+            raise
         pages_fetched_total += 1
         if include_debug:
             resp_debug = resp.get("debug") or {}
@@ -622,7 +665,16 @@ def _bq_insert_with_fallback(
         return {"table": table_id, "inserted": len(rows), "errors": []}
 
     if not allow_drop_fields:
-        return {"table": table_id, "inserted": 0, "errors": errors}
+        failed_indexes = sorted({
+            e.get("index") for e in errors if isinstance(e, dict) and "index" in e
+        })
+        inserted_est = max(0, len(rows) - len(failed_indexes)) if failed_indexes else 0
+        return {
+            "table": table_id,
+            "inserted": inserted_est,
+            "errors": errors,
+            "failed_indexes": failed_indexes,
+        }
 
     # Detect unknown fields
     unknown_fields = set()
@@ -634,15 +686,29 @@ def _bq_insert_with_fallback(
                 unknown_fields.add(loc)
 
     if not unknown_fields:
-        return {"table": table_id, "inserted": 0, "errors": errors}
+        failed_indexes = sorted({
+            e.get("index") for e in errors if isinstance(e, dict) and "index" in e
+        })
+        inserted_est = max(0, len(rows) - len(failed_indexes)) if failed_indexes else 0
+        return {
+            "table": table_id,
+            "inserted": inserted_est,
+            "errors": errors,
+            "failed_indexes": failed_indexes,
+        }
 
     # Retry once after dropping unknown fields (schema propagation lag workaround)
     rows2 = [{k: v for k, v in r.items() if k not in unknown_fields} for r in rows]
     errors2 = client.insert_rows_json(table_id, rows2)
+    failed_indexes = sorted({
+        e.get("index") for e in errors2 if isinstance(e, dict) and "index" in e
+    })
+    inserted_est = max(0, len(rows2) - len(failed_indexes)) if failed_indexes else 0
     return {
         "table": table_id,
-        "inserted": 0 if errors2 else len(rows2),
+        "inserted": inserted_est if errors2 else len(rows2),
         "errors": errors2 if errors2 else [],
+        "failed_indexes": failed_indexes,
         "fallback_dropped_fields": sorted(list(unknown_fields)),
         "first_errors": errors[:3],
     }
@@ -713,7 +779,42 @@ def write_bigquery(
             "excluded_canceled_orders": int(totals.get("canceled_orders", 0) or 0),
             "excluded_non_amazon_orders": int(totals.get("excluded_non_amazon_orders", 0) or 0),
         })
+    logger.info(json.dumps({
+        "event": "orders_agg_pre_insert",
+        "run_id": run_id,
+        "scope": scope,
+        "snapshot_date": str(snapshot_date),
+        "agg_rows": len(agg_rows),
+        "has_eu_all": any(
+            r.get("country_code") == "EU" and r.get("marketplace_id") == "__ALL__"
+            for r in agg_rows
+        ),
+    }))
     results["sales_daily_agg"] = _bq_insert_with_fallback(client, bq_orders_agg_table_id(), agg_rows, allow_drop_fields=False)
+    eu_all_index = next(
+        (i for i, r in enumerate(agg_rows) if r.get("country_code") == "EU" and r.get("marketplace_id") == "__ALL__"),
+        None,
+    )
+    errors = results["sales_daily_agg"].get("errors") or []
+    failed_indexes = results["sales_daily_agg"].get("failed_indexes") or []
+    if errors:
+        eu_all_failed = eu_all_index in failed_indexes if eu_all_index is not None else False
+        errors_sample = errors[:3]
+        logger.error(json.dumps({
+            "event": "orders_agg_insert_errors",
+            "run_id": run_id,
+            "scope": scope,
+            "snapshot_date": str(snapshot_date),
+            "table": bq_orders_agg_table_id(),
+            "agg_rows": len(agg_rows),
+            "eu_all_index": eu_all_index,
+            "eu_all_failed": eu_all_failed,
+            "failed_indexes": failed_indexes,
+            "errors_sample": errors_sample,
+        }))
+        results["sales_daily_agg"]["eu_all_index"] = eu_all_index
+        results["sales_daily_agg"]["eu_all_failed"] = eu_all_failed
+        results["sales_daily_agg"]["errors_sample"] = errors_sample
 
     # 3. Items Raw
     items_bq = []
@@ -768,6 +869,7 @@ def run_daily(
     scope = scope.upper()
     run_id = str(uuid.uuid4())
     logger.info(json.dumps({"event": "run_daily_start", "run_id": run_id, "scope": scope, "date": str(snapshot_date)}))
+    logger.info(json.dumps({"event": "run_daily_after_start", "run_id": run_id, "scope": scope, "snapshot_date": str(snapshot_date)}))
 
     orders, tw_debug = fetch_orders_for_scope(
         scope=scope,
@@ -862,5 +964,12 @@ def run_daily(
         if debug_items or not compact:
             err_resp["debug"] = resp.get("debug", {})
         return err_resp
+
+    if (bq_res.get("sales_daily_agg") or {}).get("errors"):
+        resp["ok"] = False
+        resp["status"] = "BQ_INSERT_FAILED"
+        resp["stage"] = "bq_insert"
+        resp["error"] = "BigQuery insert_rows_json returned row errors"
+        resp["bq_insert_failed_tables"] = ["sales_daily_agg"]
 
     return resp
