@@ -42,3 +42,48 @@ JOIN latest_asin la
   ON ad.ingested_at = la.max_ingested_at
 WHERE ad.scope = p_scope AND ad.snapshot_date = p_snapshot_date
 GROUP BY 1,2,3;
+
+-- Orders daily agg latest ingested_at duplicate check
+WITH latest_orders_agg AS (
+  SELECT
+    MAX(ingested_at) AS max_ingested_at
+  FROM `amazon_ops.probe_orders_daily_agg_v1`
+  WHERE scope = p_scope AND snapshot_date = p_snapshot_date
+)
+SELECT
+  scope,
+  snapshot_date,
+  country_code,
+  marketplace_id,
+  COUNT(*) AS duplicate_rows
+FROM `amazon_ops.probe_orders_daily_agg_v1` oa
+JOIN latest_orders_agg lo
+  ON oa.ingested_at = lo.max_ingested_at
+WHERE oa.scope = p_scope AND oa.snapshot_date = p_snapshot_date
+GROUP BY 1,2,3,4
+HAVING COUNT(*) > 1;
+
+-- Orders daily agg EU summary row existence for latest ingested_at
+WITH latest_orders_agg AS (
+  SELECT
+    MAX(ingested_at) AS max_ingested_at
+  FROM `amazon_ops.probe_orders_daily_agg_v1`
+  WHERE scope = p_scope AND snapshot_date = p_snapshot_date
+)
+SELECT
+  IF(COUNT(*) = 1, "PASS", "FAIL") AS result,
+  COUNT(*) AS summary_rows
+FROM `amazon_ops.probe_orders_daily_agg_v1` oa
+JOIN latest_orders_agg lo
+  ON oa.ingested_at = lo.max_ingested_at
+WHERE oa.scope = p_scope
+  AND oa.snapshot_date = p_snapshot_date
+  AND oa.country_code = "EU"
+  AND oa.marketplace_id = "__ALL__";
+
+-- Latest all view returns a single row for scope and snapshot_date
+SELECT
+  IF(COUNT(*) = 1, "PASS", "FAIL") AS result,
+  COUNT(*) AS summary_rows
+FROM `amazon_ops.v_probe_sales_daily_latest_all`
+WHERE scope = p_scope AND snapshot_date = p_snapshot_date;

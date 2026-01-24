@@ -699,6 +699,20 @@ def write_bigquery(
             "excluded_canceled_orders": int(totals.get("canceled_orders", 0) or 0),
             "excluded_non_amazon_orders": int(totals.get("excluded_non_amazon_orders", 0) or 0),
         })
+    if scope.upper() == "EU":
+        agg_rows.append({
+            "ingested_at": ingested_at,
+            "run_id": run_id,
+            "scope": scope,
+            "snapshot_date": str(snapshot_date),
+            "country_code": "EU",
+            "marketplace_id": "__ALL__",
+            "orders_count": int(totals.get("orders_count", 0) or 0),
+            "units_sold": int(totals.get("units_sold", 0) or 0),
+            "filter_mode": filter_mode,
+            "excluded_canceled_orders": int(totals.get("canceled_orders", 0) or 0),
+            "excluded_non_amazon_orders": int(totals.get("excluded_non_amazon_orders", 0) or 0),
+        })
     results["sales_daily_agg"] = _bq_insert_with_fallback(client, bq_orders_agg_table_id(), agg_rows, allow_drop_fields=False)
 
     # 3. Items Raw
