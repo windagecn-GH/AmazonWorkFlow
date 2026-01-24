@@ -30,3 +30,5 @@ __pycache__/
 # local env files
 .env.local
 .env.*.local
+.vscode/
+*.code-workspace

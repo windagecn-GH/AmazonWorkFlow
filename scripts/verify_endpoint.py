@@ -252,6 +252,7 @@ def main() -> int:
     response_status = data.get("status")
     response_stage = data.get("stage")
     response_run_id = data.get("run_id")
+    response_error = data.get("error")
     status_int = _coerce_int_status(response_status)
 
     if (response_ok is False) or (status_int is not None and status_int != 200):
@@ -268,6 +269,7 @@ def main() -> int:
                     "response_status": response_status,
                     "response_stage": response_stage,
                     "response_run_id": response_run_id,
+                    "response_error": response_error,
                     "assertions": [],
                 },
             )
@@ -349,6 +351,7 @@ def main() -> int:
         "response_status": response_status,
         "response_stage": response_stage,
         "response_run_id": response_run_id,
+        "response_error": response_error,
         "orders_count": orders_count,
         "units_sold": units_sold,
         "items_rows_count": items_rows_count,

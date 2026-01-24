@@ -4,6 +4,7 @@ import uuid
 import logging
 import os
 import sys
+import json
 from datetime import date as date_type
 from typing import Optional
 
@@ -123,20 +124,43 @@ def cron_daily(
     except SpapiRequestError as e:
         payload = e.to_dict()
         payload.update({"scope": scope_u, "snapshot_date": str(snap)})
+        logger.exception(json.dumps({
+            "event": "cron_daily_spapi_exception",
+            "scope": scope_u,
+            "snapshot_date": str(snap),
+            "run_id": e.run_id,
+            "stage": e.stage,
+            "status": e.status,
+            "error": e.message,
+            "debug": e.debug,
+        }))
+        sys.stdout.flush()
+        sys.stderr.flush()
         return JSONResponse(payload, status_code=200)
     except Exception as e:
         import traceback
+        logger.exception(json.dumps({
+            "event": "cron_daily_unhandled_exception",
+            "scope": scope_u,
+            "snapshot_date": str(snap),
+            "run_id": run_id,
+            "exc_type": type(e).__name__,
+            "exc": repr(e),
+        }))
+        include_trace = bool(int(debugItems)) or (int(compact) == 0)
+        payload = {
+            "ok": False,
+            "response_stage": "unhandled_exception",
+            "response_status": 0,
+            "response_run_id": run_id,
+            "error": {"type": type(e).__name__, "message": str(e)},
+        }
+        if include_trace:
+            payload["trace"] = traceback.format_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
         return JSONResponse(
-            {
-                "ok": False,
-                "status": 0,
-                "stage": "error",
-                "scope": scope_u,
-                "snapshot_date": str(snap),
-                "error": str(e),
-                "run_id": "unknown",
-                "trace": traceback.format_exc()
-            },
+            payload,
             status_code=200,
         )
 
