@@ -253,6 +253,9 @@ def main() -> int:
     response_stage = data.get("stage")
     response_run_id = data.get("run_id")
     response_error = data.get("error")
+    diagnostics = {
+        "missing_envs": data.get("missing_envs"),
+    }
     bq_sales_daily_agg = ((data.get("bq") or {}).get("sales_daily_agg") or {})
     bq_sales_daily_agg_diag = {
         "failed_indexes": bq_sales_daily_agg.get("failed_indexes"),
@@ -277,6 +280,7 @@ def main() -> int:
                     "response_run_id": response_run_id,
                     "response_error": response_error,
                     "bq_sales_daily_agg_diag": bq_sales_daily_agg_diag,
+                    "diagnostics": diagnostics,
                     "assertions": [],
                 },
             )
@@ -360,6 +364,7 @@ def main() -> int:
         "response_run_id": response_run_id,
         "response_error": response_error,
         "bq_sales_daily_agg_diag": bq_sales_daily_agg_diag,
+        "diagnostics": diagnostics,
         "orders_count": orders_count,
         "units_sold": units_sold,
         "items_rows_count": items_rows_count,

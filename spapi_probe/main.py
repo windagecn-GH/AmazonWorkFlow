@@ -12,6 +12,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
 from .config import require_env, tz_for_scope
+from .utils_env import get_missing_required_envs
 from .spapi_core import SpapiRequestError
 from .utils_time import yesterday_local
 from .orders_agg import run_daily, fetch_orders_for_scope
@@ -107,6 +108,31 @@ def cron_daily(
             }
         )
     # On Cloud Run, allow dry=1 to execute and compute aggregates (no BQ writes).
+
+    missing_envs = get_missing_required_envs()
+    if missing_envs:
+        logger.error(json.dumps({
+            "event": "cron_daily_env_missing",
+            "run_id": run_id,
+            "scope": scope_u,
+            "snapshot_date": str(snap),
+            "missing_envs": missing_envs,
+        }))
+        sys.stdout.flush()
+        sys.stderr.flush()
+        return JSONResponse(
+            {
+                "ok": False,
+                "status": "ENV_MISSING",
+                "stage": "bootstrap",
+                "error": f"Missing required env var(s): {', '.join(missing_envs)}",
+                "run_id": run_id,
+                "scope": scope_u,
+                "snapshot_date": str(snap),
+                "missing_envs": missing_envs,
+            },
+            status_code=200,
+        )
 
     try:
         out = run_daily(
