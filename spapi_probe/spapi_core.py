@@ -1,7 +1,9 @@
 # spapi_core.py
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 from .spapi_client import spapi_request
 
@@ -86,17 +88,59 @@ def spapi_request_json(
         }
 
         if not out["ok"]:
+            if status_int in (401, 403):
+                resp_text = resp_body
+                if not isinstance(resp_text, str):
+                    resp_text = json.dumps(resp_body, ensure_ascii=True)
+                out["debug"]["response_text_trunc"] = (resp_text or "")[:2000]
             out["error"] = _extract_error_message(resp_body, status)
             out["payload"] = {}
         return out
 
     except Exception as e:
+        http_status = 0
+        response = getattr(e, "response", None)
+        try:
+            http_status = int(getattr(response, "status_code", 0) or 0)
+        except Exception:
+            http_status = 0
+        request_url = path
+        if query:
+            request_url = f"{path}?{urlencode(query)}"
+        query_keys = sorted(query.keys()) if isinstance(query, dict) else []
+        trace_id = None
+        if response is not None:
+            headers_map = getattr(response, "headers", None)
+            if headers_map:
+                trace_id = (
+                    headers_map.get("x-amzn-requestid")
+                    or headers_map.get("x-amz-request-id")
+                    or headers_map.get("x-request-id")
+                )
+        response_text_trunc = None
+        if http_status in (401, 403) and response is not None:
+            try:
+                response_text_trunc = (getattr(response, "text", "") or "")[:2000]
+            except Exception:
+                response_text_trunc = None
         return {
             "ok": False,
-            "status": 0,
+            "status": http_status or 0,
             "payload": {},
-            "debug": {"exception": repr(e)},
-            "error": repr(e),
+            "debug": {
+                "exc_type": type(e).__name__,
+                "exc": repr(e),
+                "where": "spapi_request_json",
+                "path": path,
+                "method": method,
+                "scope": scope,
+                "query_keys": query_keys,
+                "trace_id": trace_id,
+                "request_url": request_url,
+                "http_status": http_status or 0,
+                "response_text_trunc": response_text_trunc,
+            },
+            "error": str(e),
         }
 
 

@@ -15,7 +15,7 @@ SELECT
   excluded_canceled_orders,
   excluded_non_amazon_orders
 FROM `amazon_ops.probe_orders_daily_agg_v1`
-WHERE country_code != "EU" AND marketplace_id != "__ALL__"
+WHERE country_code != 'EU' AND marketplace_id != '__ALL__'
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY snapshot_date, scope, country_code, marketplace_id
   ORDER BY ingested_at DESC
@@ -35,7 +35,7 @@ SELECT
   excluded_canceled_orders,
   excluded_non_amazon_orders
 FROM `amazon_ops.probe_orders_daily_agg_v1`
-WHERE country_code = "EU" AND marketplace_id = "__ALL__"
+WHERE country_code = 'EU' AND marketplace_id = '__ALL__'
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY snapshot_date, scope
   ORDER BY ingested_at DESC
