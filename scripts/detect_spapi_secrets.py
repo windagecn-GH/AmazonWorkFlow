@@ -52,7 +52,6 @@ def _pick_refresh(
     *,
     include_tokens: List[str],
     exclude_tokens: List[str],
-    allow_sandbox: bool,
 ) -> str:
     def matches(lowered: str) -> bool:
         if "refresh" not in lowered:
@@ -63,8 +62,6 @@ def _pick_refresh(
         for token in exclude_tokens:
             if token in lowered:
                 return False
-        if not allow_sandbox and "sandbox" in lowered:
-            return False
         return True
 
     return _pick_first(names, matches)
@@ -73,23 +70,21 @@ def _pick_refresh(
 def _select_refresh(names: List[Tuple[str, str]], scope: str) -> str:
     scope_norm = (scope or "").strip().lower() or "eu"
     if scope_norm == "eu":
-        picked = _pick_refresh(names, include_tokens=["eu"], exclude_tokens=[], allow_sandbox=False)
+        picked = _pick_refresh(names, include_tokens=["eu"], exclude_tokens=[])
+        if picked:
+            return picked
+        picked = _pick_refresh(names, include_tokens=["na"], exclude_tokens=[])
         if picked:
             return picked
     elif scope_norm == "na":
-        picked = _pick_refresh(names, include_tokens=["na"], exclude_tokens=[], allow_sandbox=False)
+        picked = _pick_refresh(names, include_tokens=["na"], exclude_tokens=[])
+        if picked:
+            return picked
+        picked = _pick_refresh(names, include_tokens=["eu"], exclude_tokens=[])
         if picked:
             return picked
 
-    picked = _pick_refresh(names, include_tokens=[], exclude_tokens=["eu", "na"], allow_sandbox=False)
-    if picked:
-        return picked
-
-    picked = _pick_refresh(names, include_tokens=[], exclude_tokens=[], allow_sandbox=False)
-    if picked:
-        return picked
-
-    return _pick_refresh(names, include_tokens=[], exclude_tokens=[], allow_sandbox=True)
+    return _pick_refresh(names, include_tokens=[], exclude_tokens=["eu", "na"])
 
 
 def _select_secrets(names: List[str], scope: str) -> List[str]:
